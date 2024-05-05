@@ -2,3 +2,5 @@
 */debug.cfg
 */esp32s3.svd
 h4/single_axis_manual*
+/h4_revised1/pcbs/NanoElsH4revised1/NanoElsH4revised1/*.kicad_prl
+/h4_revised1/pcbs/NanoElsH4revised1/NanoElsH4revised1/fp-info-cache

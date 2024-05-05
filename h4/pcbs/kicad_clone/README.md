@@ -1,0 +1,2 @@
+- imported easyeda projects directly with KiCad 8.0.2 and saved files
+- seems OK, but not tested for importing failures

@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "NanoElsH4Keypad")(type "KiCad")(uri "$(KIPRJMOD)/NanoElsH4Keypad.pretty")(options "")(descr ""))
+)

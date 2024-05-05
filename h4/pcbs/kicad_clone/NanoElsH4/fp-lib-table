@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "NanoElsH4")(type "KiCad")(uri "$(KIPRJMOD)/NanoElsH4.pretty")(options "")(descr ""))
+)
