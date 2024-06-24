@@ -15,6 +15,7 @@ See [the data of kachurovskiy](https://github.com/kachurovskiy/nanoels/) for the
     * ESP32-S3-WROOM-1 also possible (with antenna), currently used N16R8
 
 * What's working in Hardware (with modified software)?
+	* WARNING: This special hardware version is not checked against EMC, CE, FCC and so on...
     * Display over I2C Interface
     * Programming and serial interface over FT232RL for the ESP32-S3-WROOM-1 (N16R8)
     * Keypad with direct soldered Keypad controller
