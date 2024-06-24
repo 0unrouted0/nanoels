@@ -2,6 +2,8 @@
 
 /* Change values in this section to suit your hardware. */
 
+//#define DISPLAY_I2C_EXPANDER /* Define this for using an Display with I2C expander board */
+
 // Define your hardware parameters here.
 const int ENCODER_PPR = 600; // 600 step spindle optical rotary encoder. Fractional values not supported.
 const int ENCODER_BACKLASH = 3; // Numer of impulses encoder can issue without movement of the spindle
@@ -67,7 +69,8 @@ const long PULSE_MIN_WIDTH_US = 1000; // Microseconds width of the pulse that is
 const long PULSE_HALF_BACKLASH = 2; // Prevents spurious reverses when moving using a handwheel. Raise to 3 or 4 if they still happen.
 
 const int ENCODER_STEPS_INT = ENCODER_PPR * 2; // Number of encoder impulses PCNT counts per revolution of the spindle
-const int ENCODER_FILTER = 2; // Encoder pulses shorter than this will be ignored. Clock cycles, 1 - 1023.
+//const int ENCODER_FILTER = 2; // Encoder pulses shorter than this will be ignored. Clock cycles, 1 - 1023.
+const int ENCODER_FILTER_NS = 25; // Encoder pulses shorter than this will be ignored. In ns ---> Todo, is this too short?
 const int PCNT_LIM = 31000; // Limit used in hardware pulse counter logic.
 const int PCNT_CLEAR = 30000; // Limit where we reset hardware pulse counter value to avoid overflow. Less than PCNT_LIM.
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
@@ -91,7 +94,7 @@ const bool SPINDLE_PAUSES_GCODE = true; // pause GCode execution when spindle st
 const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 
 // To be incremented whenever a measurable improvement is made.
-#define SOFTWARE_VERSION 12
+#define SOFTWARE_VERSION 99
 
 // To be changed whenever a different PCB / encoder / stepper / ... design is used.
 #define HARDWARE_VERSION 4
@@ -105,8 +108,8 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define X_STEP 20
 
 #define BUZZ 4
-#define SCL 5
-#define SDA 6
+#define KEYS_SCL 5
+#define KEYS_SDA 6
 
 #define A11 9
 #define A12 10
@@ -115,6 +118,25 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define A21 12
 #define A22 13
 #define A23 14
+
+#ifdef DISPLAY_I2C_EXPANDER
+// If using display with I2C expander, only two pins are used
+#define DISP_SDA  2
+#define DISP_SCL  1
+#else
+// Default standard display
+#define DISP_RS 21
+#define DISP_EN 48
+#define DISP_D0 47
+#define DISP_D1 38
+#define DISP_D2 39
+#define DISP_D3 40
+#define DISP_D4 41
+#define DISP_D5 42
+#define DISP_D6 2
+#define DISP_D7 1
+#endif
+
 
 #define B_LEFT 57
 #define B_RIGHT 37
@@ -242,12 +264,24 @@ const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode
 #define DELAY(x) vTaskDelay(x / portTICK_PERIOD_MS);
 
 // ESP32 hardware pulse counter library used to count spindle encoder pulses.
-#include "driver/pcnt.h"
+//#include "driver/pcnt.h"
+#include "driver/pulse_cnt.h"
 
 #include <SPI.h>
 #include <Wire.h>
-#include <LiquidCrystal.h>
-LiquidCrystal lcd(21, 48, 47, 38, 39, 40, 41, 42, 2, 1);
+
+TwoWire I2C_keys = TwoWire(0);
+
+#ifdef DISPLAY_I2C_EXPANDER
+  TwoWire I2C_disp = TwoWire(1);  // Generate a secondary I2C object
+  #include "LiquidCrystal_I2C_pt.h"
+  //I2C_disp.setPins(DISP_SDA, DISP_SCL);
+  LiquidCrystal_I2C lcd(0x27,20,4, &I2C_disp);
+#else
+  #include <LiquidCrystal.h>
+  LiquidCrystal lcd(DISP_RS, DISP_EN, DISP_D0, DISP_D1, DISP_D2, DISP_D3, DISP_D4, DISP_D5, DISP_D6, DISP_D7);
+#endif
+
 #define LCD_HASH_INITIAL -3845709 // Random number that's unlikely to naturally occur as an actual hash
 long lcdHashLine0 = LCD_HASH_INITIAL;
 long lcdHashLine1 = LCD_HASH_INITIAL;
@@ -351,6 +385,9 @@ struct Axis {
   int dir; // Direction pin of this motor
   int step; // Step pin of this motor
 };
+
+pcnt_unit_handle_t pcnt_unit_1 = NULL;
+pcnt_channel_handle_t pcnt_chan_1A = NULL;
 
 void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps, float screwPitch, long speedStart, long speedManualMove,
     long acceleration, bool invertStepper, bool needsRest, long maxTravelMm, long backlashDu, int ena, int dir, int step) {
@@ -567,7 +604,9 @@ int gcodeProgramCount = 0;
 String gcodeProgram = "";
 int gcodeProgramCharIndex = 0;
 
-hw_timer_t *async_timer = timerBegin(0, 80, true);
+#define TIMER_RESOLUTION_HZ   1000000UL   /* 1MHz resolution */
+// https://docs.espressif.com/projects/arduino-esp32/en/latest/api/timer.html
+hw_timer_t *async_timer = NULL;
 bool timerAttached = false;
 
 int getApproxRpm() {
@@ -1037,13 +1076,6 @@ void IRAM_ATTR pulse2Enc() {
   }
 }
 
-void setAsyncTimerEnable(bool value) {
-  if (value) {
-    timerAlarmEnable(async_timer);
-  } else {
-    timerAlarmDisable(async_timer);
-  }
-}
 
 void taskDisplay(void *param) {
   while (emergencyStop == ESTOP_NONE) {
@@ -1579,29 +1611,51 @@ bool removeAllGcode() {
   return true;
 }
 
-void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
-  pcnt_config_t pcntConfig;
-  pcntConfig.pulse_gpio_num = gpioA;
-  pcntConfig.ctrl_gpio_num = gpioB;
-  pcntConfig.channel = PCNT_CHANNEL_0;
-  pcntConfig.unit = unit;
-  pcntConfig.pos_mode = PCNT_COUNT_INC;
-  pcntConfig.neg_mode = PCNT_COUNT_DEC;
-  pcntConfig.lctrl_mode = PCNT_MODE_REVERSE;
-  pcntConfig.hctrl_mode = PCNT_MODE_KEEP;
-  pcntConfig.counter_h_lim = PCNT_LIM;
-  pcntConfig.counter_l_lim = -PCNT_LIM;
-  pcnt_unit_config(&pcntConfig);
-  pcnt_set_filter_value(unit, ENCODER_FILTER);
-	pcnt_filter_enable(unit);
-  pcnt_counter_pause(unit);
-  pcnt_counter_clear(unit);
-  pcnt_counter_resume(unit);
+/* Init and start of pulse counter for encoder interface */
+/* References
+ * https://docs.espressif.com/projects/esp-idf/en/v5.1.4/esp32/api-reference/peripherals/pcnt.html
+ * https://github.com/espressif/esp-idf/blob/v5.2.2/examples/peripherals/pcnt/rotary_encoder/main/rotary_encoder_example_main.c
+ */
+void startPulseCounter()
+{
+  pcnt_unit_config_t pcnt_unit_config;
+  pcnt_chan_config_t pcnt_chan_config;
+  pcnt_glitch_filter_config_t filter_config;
+  
+  Serial.println("Start PCNT encoder setup...");
+
+  // install pcnt unit
+  pcnt_unit_config.low_limit = -PCNT_LIM;
+  pcnt_unit_config.high_limit = PCNT_LIM;
+  ESP_ERROR_CHECK(pcnt_new_unit(&pcnt_unit_config, &pcnt_unit_1));
+
+  // set glitch filter
+  filter_config.max_glitch_ns = ENCODER_FILTER_NS;
+  ESP_ERROR_CHECK(pcnt_unit_set_glitch_filter(pcnt_unit_1, &filter_config));
+
+  // install pcnt channel
+  pcnt_chan_config.edge_gpio_num = ENC_A;
+  pcnt_chan_config.level_gpio_num = ENC_B;
+  ESP_ERROR_CHECK(pcnt_new_channel(pcnt_unit_1, &pcnt_chan_config, &pcnt_chan_1A));
+
+  // set edge and level actions for pcnt channels
+  //                                           .... channel, POS or HCTRL                     , NEG or LCTRL
+  ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan_1A, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE));
+  ESP_ERROR_CHECK(pcnt_channel_set_level_action(pcnt_chan_1A, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
+
+  // enable pcnt unit without counting
+  ESP_ERROR_CHECK(pcnt_unit_enable(pcnt_unit_1));
+
+  // Clear PCNT pulse count value to zero. 
+  ESP_ERROR_CHECK(pcnt_unit_clear_count(pcnt_unit_1));
+
+  // Start the PCNT unit, the counter will start to count according to the edge and/or level input signals.
+  ESP_ERROR_CHECK(pcnt_unit_start(pcnt_unit_1));
 }
 
 // Attaching interrupt on core 0 to have more time on core 1 where axes are moved.
 void taskAttachInterrupts(void *param) {
-  startPulseCounter(PCNT_UNIT_0, ENC_A, ENC_B);
+  startPulseCounter();
   if (PULSE_1_USE) attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
   if (PULSE_2_USE) attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
   vTaskDelete(NULL);
@@ -1609,13 +1663,16 @@ void taskAttachInterrupts(void *param) {
 
 void setEmergencyStop(int kind) {
   emergencyStop = kind;
-  setAsyncTimerEnable(false);
+  timerStop(async_timer);
   xSemaphoreTake(z.mutex, 10);
   xSemaphoreTake(x.mutex, 10);
   xSemaphoreTake(a1.mutex, 10);
 }
 
 void setup() {
+  Serial.begin(115200);
+  Serial.println("Start setup...");
+
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
 
@@ -1652,6 +1709,9 @@ void setup() {
     DLOW(A21);
   }
 
+  // Starting the hardware timer
+  async_timer = timerBegin(TIMER_RESOLUTION_HZ);
+
   Preferences pref;
   pref.begin(PREF_NAMESPACE);
   if (pref.getInt(PREF_VERSION) != PREFERENCES_VERSION) {
@@ -1666,7 +1726,7 @@ void setup() {
   isOn = false;
   savedDupr = dupr = pref.getLong(PREF_DUPR);
   motionMutex = xSemaphoreCreateMutex();
-  savedStarts = starts = min(STARTS_MAX, max(1, pref.getInt(PREF_STARTS)));
+  savedStarts = starts = min((int32_t)STARTS_MAX, max((int32_t)1, pref.getInt(PREF_STARTS)));
   z.savedPos = z.pos = pref.getLong(PREF_POS_Z);
   z.savedPosGlobal = z.posGlobal = pref.getLong(PREF_POS_GLOBAL_Z);
   z.savedOriginPos = z.originPos = pref.getLong(PREF_ORIGIN_POS_Z);
@@ -1723,7 +1783,15 @@ void setup() {
   }
   pref.end();
 
-  lcd.begin(20, 4);
+  Serial.println("Init display...");
+  #ifdef DISPLAY_I2C_EXPANDER
+    I2C_disp.setPins(DISP_SDA, DISP_SCL);
+    lcd.init();
+    lcd.backlight();
+  #else
+    lcd.begin(20, 4);
+  #endif
+
   lcd.createChar(customCharMmCode, customCharMm);
   lcd.createChar(customCharLimLeftCode, customCharLimLeft);
   lcd.createChar(customCharLimRightCode, customCharLimRight);
@@ -1732,11 +1800,11 @@ void setup() {
   lcd.createChar(customCharLimUpDownCode, customCharLimUpDown);
   lcd.createChar(customCharLimLeftRightCode, customCharLimLeftRight);
 
-  Serial.begin(115200);
 
-  if (!Wire.begin(SDA, SCL)) {
+
+  if (!I2C_keys.begin(KEYS_SDA, KEYS_SCL)) {
     Serial.println("I2C initialization failed");
-  } else if (!keypad.begin(TCA8418_DEFAULT_ADDR, &Wire)) {
+  } else if (!keypad.begin(TCA8418_DEFAULT_ADDR, &I2C_keys)) {
     Serial.println("TCA8418 key controller not found");
   } else {
     keypad.matrix(7, 7);
@@ -1861,10 +1929,10 @@ void updateAsyncTimerSettings() {
   // dupr and therefore direction can change while we're in async mode.
   setDir(getAsyncAxis(), dupr > 0);
 
-  // dupr can change while we're in async mode, keep updating timer frequency.
-  timerAlarmWrite(async_timer, getTimerLimit(), true);
-  // without this timer stops working if already above new limit
+  timerStop(async_timer);
   timerWrite(async_timer, 0);
+  // dupr can change while we're in async mode, keep updating timer frequency.
+  timerAlarm(async_timer, getTimerLimit(), true, 0);  /* Automatically enables Alarm*/
 }
 
 void setDupr(long value) {
@@ -1918,6 +1986,7 @@ unsigned int getTimerLimit() {
 // Only used for async movement in ASYNC and A1 modes.
 // Keep code in this method to absolute minimum to achieve high stepper speeds.
 void IRAM_ATTR onAsyncTimer() {
+  //Serial.print("A"); //for debug -throws wdt reset!!!
   Axis* a = getAsyncAxis();
   if (!isOn || a->movingManually || (mode != MODE_ASYNC && mode != MODE_A1)) {
     return;
@@ -1958,17 +2027,17 @@ void setModeFromLoop(int value) {
   if (mode == MODE_THREAD) {
     setStarts(1);
   } else if (mode == MODE_ASYNC || mode == MODE_A1) {
-    setAsyncTimerEnable(false);
+    timerStop(async_timer);
   }
   mode = value;
   setupIndex = 0;
   if (mode == MODE_ASYNC || mode == MODE_A1) {
     if (!timerAttached) {
       timerAttached = true;
-      timerAttachInterrupt(async_timer, &onAsyncTimer, true);
+      timerAttachInterrupt(async_timer, &onAsyncTimer);
     }
     updateAsyncTimerSettings();
-    setAsyncTimerEnable(true);
+    timerStart(async_timer);
   }
 }
 
@@ -3217,52 +3286,57 @@ void discountFullSpindleTurns() {
   }
 }
 
-void processSpindleCounter() {
-  int16_t count;
-  pcnt_get_counter_value(PCNT_UNIT_0, &count);
-  int delta = count - spindleCount;
-  if (delta == 0) {
-    return;
-  }
-  if (count >= PCNT_CLEAR || count <= -PCNT_CLEAR) {
-    pcnt_counter_clear(PCNT_UNIT_0);
-    spindleCount = 0;
-  } else {
-    spindleCount = count;
-  }
-
-  unsigned long microsNow = micros();
-  if (showTacho || mode == MODE_GCODE) {
-    if (spindleEncTimeIndex >= RPM_BULK) {
-      spindleEncTimeDiffBulk = microsNow - spindleEncTimeAtIndex0;
-      spindleEncTimeAtIndex0 = microsNow;
-      spindleEncTimeIndex = 0;
+void processSpindleCounter()
+{
+  if(pcnt_unit_1 != NULL)
+  {
+    // Checking spindle counter only after pcnt_unit_1 is ready
+    int count;
+    pcnt_unit_get_count(pcnt_unit_1, &count);
+    int delta = count - spindleCount;
+    if (delta == 0) {
+      return;
     }
-    spindleEncTimeIndex += abs(delta);
-  } else {
-    spindleEncTimeDiffBulk = 0;
-  }
+    if (count >= PCNT_CLEAR || count <= -PCNT_CLEAR) {
+      pcnt_unit_clear_count(pcnt_unit_1);
+      spindleCount = 0;
+    } else {
+      spindleCount = count;
+    }
 
-  spindlePos += delta;
-  spindlePosGlobal += delta;
-  if (spindlePosGlobal > ENCODER_STEPS_INT) {
-    spindlePosGlobal -= ENCODER_STEPS_INT;
-  } else if (spindlePosGlobal < 0) {
-    spindlePosGlobal += ENCODER_STEPS_INT;
-  }
-  if (spindlePos > spindlePosAvg) {
-    spindlePosAvg = spindlePos;
-  } else if (spindlePos < spindlePosAvg - ENCODER_BACKLASH) {
-    spindlePosAvg = spindlePos + ENCODER_BACKLASH;
-  }
-  spindleEncTime = microsNow;
+    unsigned long microsNow = micros();
+    if (showTacho || mode == MODE_GCODE) {
+      if (spindleEncTimeIndex >= RPM_BULK) {
+        spindleEncTimeDiffBulk = microsNow - spindleEncTimeAtIndex0;
+        spindleEncTimeAtIndex0 = microsNow;
+        spindleEncTimeIndex = 0;
+      }
+      spindleEncTimeIndex += abs(delta);
+    } else {
+      spindleEncTimeDiffBulk = 0;
+    }
 
-  if (spindlePosSync != 0) {
-    spindlePosSync += delta;
-    if (spindlePosSync % ENCODER_STEPS_INT == 0) {
-      spindlePosSync = 0;
-      Axis* a = getPitchAxis();
-      spindlePosAvg = spindlePos = spindleFromPos(a, a->pos);
+    spindlePos += delta;
+    spindlePosGlobal += delta;
+    if (spindlePosGlobal > ENCODER_STEPS_INT) {
+      spindlePosGlobal -= ENCODER_STEPS_INT;
+    } else if (spindlePosGlobal < 0) {
+      spindlePosGlobal += ENCODER_STEPS_INT;
+    }
+    if (spindlePos > spindlePosAvg) {
+      spindlePosAvg = spindlePos;
+    } else if (spindlePos < spindlePosAvg - ENCODER_BACKLASH) {
+      spindlePosAvg = spindlePos + ENCODER_BACKLASH;
+    }
+    spindleEncTime = microsNow;
+
+    if (spindlePosSync != 0) {
+      spindlePosSync += delta;
+      if (spindlePosSync % ENCODER_STEPS_INT == 0) {
+        spindlePosSync = 0;
+        Axis* a = getPitchAxis();
+        spindlePosAvg = spindlePos = spindleFromPos(a, a->pos);
+      }
     }
   }
 }
