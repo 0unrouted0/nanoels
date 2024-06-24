@@ -1,42 +1,39 @@
-This software and instructions are [provided as is](LICENSE), without warranty of any kind. [🇷🇺 Перевод на русский](https://translate.google.com/translate?hl=en&sl=en&tl=ru&u=https%3A%2F%2Fgithub.com%2Fkachurovskiy%2Fnanoels%2Fblob%2Fmain%2FREADME.md), [🇩🇪 deutsche Übersetzung](https://translate.google.com/translate?hl=en&sl=en&tl=de&u=https%3A%2F%2Fgithub.com%2Fkachurovskiy%2Fnanoels%2Fblob%2Fmain%2FREADME.md)
+This software and instructions are [provided as is](LICENSE), without warranty of any kind.
 
-# NanoEls H4
+See [the data of kachurovskiy](https://github.com/kachurovskiy/nanoels/) for the original NanoEls
 
-CNC and electronic lead screw controller based on ESP32-S3 that supports up to 4 axes:
+# NanoEls H4 revised1 (currently unfinished work!!)
+* This is an idea of an low cost variant with multiple placement and handsolder types for the components. For e.g.
+    * PCB double sided 100mm x 100mm standard type
+    * Design with free KiCad 8
+    * All parts for hand solder (TCA8418 tricky, but possible - or usage of Adafruit Module)
+    * One PCB for keypad and controls
+    * Powering over USB or step-down converter with screw terminals
+    * Interfacing to LCD via I2C interface over 4 pins possible (== same LCD type with I2C backpack PCB as sold on Aliexpress)
+    * USB program and serial interface variants FT232RL or CH340 series
+    * USB Connectors 90° types in two sides (idea: back connector>power, front connector>PC-control) or side entry both over 180° Types
+    * ESP32-S3-WROOM-1 also possible (with antenna), currently used N16R8
 
-- Automatic threads including multi-start
-- Multi-pass turning, facing and cones
-- Precise movements, soft limits and much more
+* What's working in Hardware (with modified software)?
+    * Display over I2C Interface
+    * Programming and serial interface over FT232RL for the ESP32-S3-WROOM-1 (N16R8)
+    * Keypad with direct soldered Keypad controller
 
-![h4-600px](https://github.com/kachurovskiy/nanoels/assets/517919/4090779c-ef88-4402-aeef-644f7a086ff2)
+* What's working in Software?
+    * Software should be (i can not test it) compatible with the original NanoEls H4
+    * Software working with ardunio Espressive ESP32 3.0.1 boards package (based on ESP-IDF v5.1.4). Maybe NOT backwards compatible to 2.x.
+    * Display in I2C mode working. Faultless together with secondary I2C channel for keypad interface. 
+    * Added LiquidCrystal_I2C_pt for handling of two I2C interfaces an changeable pins, because there are no available Arduino libraries with I2C pointer parameter.
+    * Currently not completely tested, but encoder detects something. Hardware timer for ASYNC and A1 mode maybe not 100% working (unclear).
 
-See [h4 folder for hardware files, software, assembly and usage manual](https://github.com/kachurovskiy/nanoels/tree/main/h4).
+* ToDo's and current bugs
+    * More testing of HW and SW
+    * Integration in a real lathe
+    * Making a low cost 3d-printable housing
+    * PCB: Pitch of buzzer is false for the delivered type. Maybe a dual pitch package is sensible
+    * PCB: Through hole pad for thermal connection of ESP32 module should have a bigger size free of solder mask
+    * PCB: maybe dual package in standard sizes for buzzer free wheeling diode
+    * PCB: upload the latest version
 
-## Build examples
-
-- [fmw626](https://github.com/kachurovskiy/nanoels/discussions/123)
-- [Kissys](https://github.com/kachurovskiy/nanoels/discussions/121)
-
-# NanoEls H2
-
-Cheap DIY Electronic Lead Screw (ELS) based on Arduino Nano for metal lathes. No more greasy gear swapping! Control your metal lathe lead screw with a few clicks.
-
-- Set leadscrew pitch for feed or thread
-- Soft limits for the carriage
-- Multi-start threads in 1 start of the spindle
-
-See [h2 folder for parts list, software, assembly and usage manual](https://github.com/kachurovskiy/nanoels/blob/main/h2/). Controller can be built from [generally available components](https://github.com/kachurovskiy/nanoels/tree/main/h2#components).
-
-It's suggested to use STEPPERONLINE CL57T closed-loop driver with NEMA 23 3NM motor or stronger with 200 step resolution mode (full step) and a 600 PPR optical rotary encoder. [See hardware.md for more info.](hardware.md)
-
-## Build examples
-
-- [EdFleta](https://github.com/kachurovskiy/nanoels/discussions/87)
-- [fmw626](https://github.com/kachurovskiy/nanoels/discussions/118)
-- [Johannmupa](https://github.com/kachurovskiy/nanoels/discussions/89)
-- [kachurovskiy](https://youtu.be/jR4tBBHSl3c?t=62)
-
-# Contributing to the project
-
-- Questions, problems and improvements: please start [a new GitHub Discussion](https://github.com/kachurovskiy/nanoels/discussions/new) or a new Issue
-- Successful builds: please start a new GitHub Discussion with photos and comments
+![PCB_H4revised1_3d_viewer](https://github.com/0unrouted0/nanoels/assets/165327246/6ad0018f-9c0e-4335-893f-ad6113fff6c5)
+![PCB_H4revised1_pic1](https://github.com/0unrouted0/nanoels/assets/165327246/551250db-3250-49b3-9a3e-d763c4f59e51)
