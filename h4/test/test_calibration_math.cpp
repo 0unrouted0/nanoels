@@ -49,6 +49,7 @@ static void expectF(const char* what, double got, double want, double tol) {
   }
 }
 
+
 // A representative Z axis: 2mm lead screw, 800 steps/rev, so one step is 25 deci-microns.
 static const float Z_PITCH = 20000.0f;
 static const float Z_STEPS = 800.0f;
@@ -242,6 +243,77 @@ static void testRpmAccumulator() {
   expectL("no timing yet reads zero", calRpmFromBulkMicros(0), 0);
 }
 
+static void testBigDroLayout() {
+  group("large display layout");
+  const int numCols = 14; // columns 14-19 are the info strip
+
+  expectL("metric under 100mm gets 0.01", calBigDroPoints(true, 12.345f), 2);
+  expectL("metric at 100mm steps to 0.1", calBigDroPoints(true, 100.0f), 1);
+  expectL("metric over 100mm stays at 0.1", calBigDroPoints(true, 287.5f), 1);
+  expectL("imperial under 10in gets 0.001", calBigDroPoints(false, 1.234f), 3);
+  expectL("imperial at 10in steps to 0.01", calBigDroPoints(false, 10.0f), 2);
+
+  expectL("four digits and a point", calBigDroWidth("12.34"), 13);
+  expectL("three digits and a point", calBigDroWidth("5.25"), 10);
+  expectL("hundreds still four digits", calBigDroWidth("123.4"), 13);
+  expectL("zero", calBigDroWidth("0.00"), 10);
+
+  // The whole point of the fixed 4-digit format: the number can never reach column 14.
+  const char* samples[] = {"0.00", "5.25", "12.34", "99.99", "100.0", "287.5", "1.234", "10.00"};
+  bool alwaysClear = true;
+  bool onesColumnStable = true;
+  int firstOnesEnd = -1;
+  for (int i = 0; i < 8; i++) {
+    int width = calBigDroWidth(samples[i]);
+    int start = calBigDroStartCol(numCols, width);
+    if (start + width > numCols) {
+      alwaysClear = false;
+    }
+    // Right-aligned, so every value ends on the same column.
+    if (firstOnesEnd < 0) {
+      firstOnesEnd = start + width;
+    } else if (start + width != firstOnesEnd) {
+      onesColumnStable = false;
+    }
+  }
+  expectB("digits never run into the info strip", alwaysClear, true);
+  expectB("every value ends on the same column", onesColumnStable, true);
+
+  expectL("normal value starts at column 1", calBigDroStartCol(numCols, 13), 1);
+  expectL("short value is pushed right", calBigDroStartCol(numCols, 10), 4);
+  // An over-wide value clamps rather than writing left of the sign column.
+  expectL("oversized value clamps to column 1", calBigDroStartCol(numCols, 19), 1);
+}
+
+static void testSlotting() {
+  group("slotting");
+  // Four passes from X=0 to X=-2mm of depth: every stroke cuts, and the last lands on the stop.
+  expectL("first pass is already cutting", slotDepthPos(0, -2000, 4, 1), -500);
+  expectL("second pass", slotDepthPos(0, -2000, 4, 2), -1000);
+  expectL("third pass", slotDepthPos(0, -2000, 4, 3), -1500);
+  expectL("last pass lands on the stop", slotDepthPos(0, -2000, 4, 4), -2000);
+  // A single pass goes straight to full depth.
+  expectL("one pass cuts it all", slotDepthPos(0, -2000, 1, 1), -2000);
+  // Cutting the other way, e.g. an internal slot fed outwards.
+  expectL("outward first pass", slotDepthPos(0, 2000, 4, 1), 500);
+  expectL("outward last pass", slotDepthPos(0, 2000, 4, 4), 2000);
+  expectL("no passes cannot move", slotDepthPos(100, -2000, 0, 1), 100);
+
+  // Blind-slot shortening. The stroke runs from the right stop to the left stop, and left is the
+  // larger coordinate on this machine, so the far end is above the near end and the reduction
+  // pulls it back down.
+  expectL("full length when off", slotStrokeEnd(0, 5000, 0, 1), 5000);
+  expectL("still full length on pass 9", slotStrokeEnd(0, 5000, 0, 9), 5000);
+  // With reduction on, pass 1 is full length and each later one stops 100 steps earlier.
+  expectL("first stroke is full length", slotStrokeEnd(0, 5000, 100, 1), 5000);
+  expectL("second stops short", slotStrokeEnd(0, 5000, 100, 2), 4900);
+  expectL("third stops shorter", slotStrokeEnd(0, 5000, 100, 3), 4800);
+  // Enough passes and the shortening would reach past the start - it has to clamp, or the stroke
+  // would reverse and cut backwards into the near stop.
+  expectL("clamped at the near stop", slotStrokeEnd(0, 5000, 100, 60), 0);
+  expectL("clamped well past it too", slotStrokeEnd(0, 5000, 100, 500), 0);
+}
+
 static void testPassDepth() {
   group("pass depth");
   // 4 passes from the surface (0) down to 1mm of infeed.
@@ -367,6 +439,8 @@ int main() {
   testEncoderPpr();
   testSpindleModulo();
   testRpmAccumulator();
+  testBigDroLayout();
+  testSlotting();
   testPassDepth();
   testPassSequencing();
   testFlankInfeed();

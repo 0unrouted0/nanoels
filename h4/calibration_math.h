@@ -187,6 +187,35 @@ inline long calNumpadRawToDu(bool inchMode, long raw) {
   return inchMode ? raw * 254 : raw * 10;
 }
 
+// ---------------------------------------------------------------------------
+// Large position display layout
+// ---------------------------------------------------------------------------
+
+// Decimal places for the big digits. Held to 4 digits total so the info strip beside them never
+// has to move: 0.01mm below 100mm, 0.1mm above, and 0.001" / 0.01" in imperial.
+inline int calBigDroPoints(bool metric, float magnitude) {
+  if (metric) {
+    return magnitude < 100 ? 2 : 1;
+  }
+  return magnitude < 10 ? 3 : 2;
+}
+
+// Columns a formatted value occupies: 3 per digit, 1 for the decimal point.
+inline int calBigDroWidth(const char* formatted) {
+  int width = 0;
+  for (int i = 0; formatted[i] != 0; i++) {
+    width += formatted[i] == '.' ? 1 : 3;
+  }
+  return width;
+}
+
+// Right-aligns the value so the ones column stays put, clamped so it never starts left of the
+// sign column. numCols is the first column belonging to the info strip.
+inline int calBigDroStartCol(int numCols, int width) {
+  int col = numCols - width;
+  return col < 1 ? 1 : col;
+}
+
 inline int calRpmFromBulkMicros(unsigned long microsPerBulk) {
   if (microsPerBulk == 0) {
     return 0;

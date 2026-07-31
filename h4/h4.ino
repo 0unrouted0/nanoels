@@ -1,17 +1,37 @@
 // https://github.com/kachurovskiy/nanoels
 
-// Everything describing YOUR machine - pins, axes, encoder, keypad - lives in machine_config.h.
-// Nothing below this line should need changing to run on different hardware.
+// Everything describing YOUR machine - pins, axes, encoder, keypad, joystick - lives in
+// machine_config.h. Nothing below this line should need changing to run on different hardware.
 #include "machine_config.h"
 
-// Arithmetic used by the motion and display code, kept in headers with no Arduino dependencies
-// so the host test suite in test/ can exercise exactly what the sketch calls.
+// Arithmetic and the settings menu table, shared with the host test suite in test/.
 #include "calibration_math.h"
+#include "settings_table.h"
 #include "pass_math.h"
 
-const int ENCODER_STEPS_INT = ENCODER_PPR * 2; // Number of encoder impulses PCNT counts per revolution of the spindle
-const int PCNT_LIM = 31000; // Limit used in hardware pulse counter logic.
-const int PCNT_CLEAR = 30000; // Limit where we reset hardware pulse counter value to avoid overflow. Less than PCNT_LIM.
+// Runtime copies of the machine_config.h defaults that the settings menu can change. The
+// constants there are only the starting point for a device that has never been configured.
+int encoderFilter = ENCODER_FILTER;
+long safeDistanceDu = SAFE_DISTANCE_DU;
+bool pulse1Use = PULSE_1_USE;
+bool pulse1Invert = PULSE_1_INVERT;
+bool pulse2Use = PULSE_2_USE;
+bool pulse2Invert = PULSE_2_INVERT;
+float pulsePerRevolution = PULSE_PER_REVOLUTION;
+long pulseMinWidthUs = PULSE_MIN_WIDTH_US;
+long pulseHalfBacklash = PULSE_HALF_BACKLASH;
+bool joystickUse = JOYSTICK_USE;
+unsigned long joystickDebounceMs = JOYSTICK_DEBOUNCE_MS;
+long stepTimeMs = STEP_TIME_MS;
+long delayBetweenStepsMs = DELAY_BETWEEN_STEPS_MS;
+
+int encoderPpr = ENCODER_PPR; // Currently active encoder PPR, can be changed in the settings menu
+// Counts the pulse counter produces per revolution of the spindle. Recomputed by
+// applyEncoderPpr() from the PPR, gearing and divider - see machine_config.h.
+int ENCODER_STEPS_INT = ENCODER_PPR * ENCODER_COUNTS_PER_PULSE;
+// Hardware counter span. On reaching +/-this the counter resets itself to zero; processSpindleCounter()
+// detects that and corrects for it, so the counter is never cleared from software.
+const int PCNT_LIM = 31000;
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
 const int32_t STARTS_MAX = 124; // No more than 124-start thread
 const long PASSES_MAX = 999; // No more turn or face passes than this
@@ -32,7 +52,10 @@ const bool SPINDLE_PAUSES_GCODE = true; // pause GCode execution when spindle st
 const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 
 // To be incremented whenever a measurable improvement is made.
-#define SOFTWARE_VERSION 12
+#define SOFTWARE_VERSION 17
+
+
+
 
 #define PREF_VERSION "v"
 #define PREF_DUPR "d"
@@ -70,6 +93,18 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define PREF_TURN_PASSES "tp"
 #define PREF_MOVE_STEP "ms"
 #define PREF_AUX_FORWARD "af"
+#define PREF_SHOW_BDRO "bdro"
+#define PREF_ENCODER_PPR "eppr"
+#define PREF_SPRING_PASSES "spp"
+#define PREF_PECK_DEPTH "pck"
+#define PREF_FLANK_INFEED "fli"
+#define PREF_RETRACT_DIST "rtd"
+#define PREF_X_DIAMETER "xdd"
+#define PREF_ENCODER_INVERT "einv"
+#define PREF_ENCODER_BACKLASH "ebl"
+#define PREF_ENCODER_SPINDLE_TEETH "est"
+#define PREF_ENCODER_PULLEY_TEETH "ept"
+#define PREF_ENCODER_DIVIDER "ediv"
 
 #define MOVE_STEP_1 10000 // 1mm
 #define MOVE_STEP_2 1000 // 0.1mm
@@ -80,6 +115,7 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define MOVE_STEP_IMP_3 254 // 1/1000" also known as 1 thou
 
 #define MODE_NORMAL 0
+#define MODE_XGEAR 1
 #define MODE_ASYNC 2
 #define MODE_CONE 3
 #define MODE_TURN 4
@@ -89,6 +125,9 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define MODE_ELLIPSE 8
 #define MODE_GCODE 9
 #define MODE_A1 10
+// 11 is left free: it is MODE_JOYSTICK on H5, which needs an analog stick this board doesn't have.
+#define MODE_SLOT 12
+#define MODE_TPR 13
 
 #define MEASURE_METRIC 0
 #define MEASURE_INCH 1
@@ -105,9 +144,14 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 // E.g. 80.02tpi would be shown as 80tpi but 80.04tpi would be shown as-is.
 const float TPI_ROUND_EPSILON = 0.03;
 
-const float ENCODER_STEPS_FLOAT = ENCODER_STEPS_INT; // Convenience float version of ENCODER_STEPS_INT
-const long RPM_BULK = ENCODER_STEPS_INT; // Measure RPM averaged over this number of encoder pulses
+float ENCODER_STEPS_FLOAT = ENCODER_STEPS_INT; // Convenience float version of ENCODER_STEPS_INT
+long RPM_BULK = ENCODER_STEPS_INT; // Measure RPM averaged over this number of encoder pulses
 const long RPM_UPDATE_INTERVAL_MICROS = 1000000; // Don't redraw RPM more often than once per second
+// Minimum time between LCD redraws. taskDisplay is otherwise an unthrottled loop, which pushes
+// redraws far faster than the glass can physically settle (~150ms on a typical HD44780) and
+// leaves a half-rewritten line on screen much of the time - both of which read as smearing.
+// Raise this if fast-moving digits are still hard to read, lower it if the screen feels laggy.
+const int LCD_MIN_UPDATE_MS = 50; // 20 redraws per second
 
 const long GCODE_FEED_DEFAULT_DU_SEC = 20000; // Default feed in du/sec in GCode mode
 const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode - F1
@@ -135,6 +179,14 @@ bool splashScreen = false;
 
 #include <Preferences.h>
 
+// Access point, config UI and firmware updates. Always compiled in, but nothing is started unless
+// the "Enabled" item in Settings > WiFi & updates is on - see machine_config.h.
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Update.h>
+#include "web_page.h"
+WebServer webServer(80);
+
 #include <Adafruit_TCA8418.h>
 Adafruit_TCA8418 keypad;
 unsigned long keypadTimeUs = 0;
@@ -148,6 +200,18 @@ bool buttonDownPressed = false;
 bool buttonOffPressed = false;
 bool buttonGearsPressed = false;
 bool buttonTurnPressed = false;
+bool buttonAPressed = false; // We saw the press of B_A, so its release is ours to handle
+unsigned long buttonAPressMs = 0; // Time B_A was pressed, to tell short and long presses apart
+
+bool xRetracted = false; // X was moved away with the retract key, position to return to is stored below
+long xRetractReturnPos = 0;
+
+// Debounced state of the 6 joystick pins: indices 0-3 are JOYSTICK_DIR_PIN_KEYS rows, 4 move button, 5 step button.
+bool joystickPinActive[6] = {false, false, false, false, false, false};
+unsigned long joystickChangeMs[6] = {0, 0, 0, 0, 0, 0};
+// Direction keys we've emitted a press for and not yet a release. Kept separate from pin state since
+// a direction key is only considered pressed while the move button is also held.
+bool joystickDirPressed[4] = {false, false, false, false};
 
 bool inNumpad = false;
 int numpadDigits[20];
@@ -179,7 +243,10 @@ struct Axis {
   char name;
   bool active;
   bool rotational;
-  float motorSteps; // motor steps per revolution of the axis
+  float motorSteps; // motor steps per revolution of the axis, after the pulley ratio
+  float motorStepsPerTurn; // motor steps per revolution of the MOTOR, as set on the driver
+  long motorTeeth; // teeth on the motor pulley
+  long screwTeeth; // teeth on the lead screw pulley
   float screwPitch; // lead screw pitch in deci-microns (10^-7 of a meter)
 
   long pos; // relative position of the tool in stepper motor steps
@@ -223,12 +290,24 @@ struct Axis {
   bool movingManually; // whether stepper is being moved by left/right buttons
   long estopSteps; // amount of steps to exceed machine limits
   long backlashSteps; // amount of steps in reverse direction to re-engage the carriage
+  long backlashDu; // backlash in deci-microns, used to re-derive backlashSteps when settings change
+  long maxTravelMm; // max travel, used to re-derive estopSteps when settings change
   long gcodeRelativePos; // absolute position in steps that relative GCode refers to
 
   int ena; // Enable pin of this motor
   int dir; // Direction pin of this motor
   int step; // Step pin of this motor
 };
+
+// Re-calculates axis values that depend on the configurable hardware parameters.
+// Must be called after motorSteps, screwPitch, backlashDu, speedManualMove or acceleration change.
+void recomputeAxisDerived(Axis* a) {
+  // Has to come first: everything below is in steps per revolution of the screw.
+  a->motorSteps = calStepsPerScrewRev(a->motorStepsPerTurn, a->motorTeeth, a->screwTeeth);
+  a->estopSteps = calEstopSteps(a->maxTravelMm, a->screwPitch, a->motorSteps);
+  a->backlashSteps = calBacklashSteps(a->backlashDu, a->motorSteps, a->screwPitch);
+  a->decelerateSteps = calDecelerateSteps(a->speedManualMove, a->speedStart, a->acceleration);
+}
 
 void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps, float screwPitch, long speedStart, long speedManualMove,
     long acceleration, bool invertStepper, bool needsRest, long maxTravelMm, long backlashDu, int ena, int dir, int step) {
@@ -237,6 +316,9 @@ void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps
   a->name = name;
   a->active = active;
   a->rotational = rotational;
+  a->motorStepsPerTurn = motorSteps;
+  a->motorTeeth = 1;
+  a->screwTeeth = 1;
   a->motorSteps = motorSteps;
   a->screwPitch = screwPitch;
 
@@ -265,12 +347,6 @@ void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps
   a->speedMax = LONG_MAX;
   a->speedManualMove = speedManualMove;
   a->acceleration = acceleration;
-  a->decelerateSteps = 0;
-  long s = speedManualMove;
-  while (s > speedStart) {
-    a->decelerateSteps++;
-    s -= a->acceleration / float(s);
-  }
 
   a->direction = true;
   a->directionInitialized = false;
@@ -282,8 +358,9 @@ void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps
   a->invertStepper = invertStepper;
   a->needsRest = needsRest;
   a->movingManually = false;
-  a->estopSteps = maxTravelMm * 10000 / a->screwPitch * a->motorSteps;
-  a->backlashSteps = backlashDu * a->motorSteps / a->screwPitch;
+  a->backlashDu = backlashDu;
+  a->maxTravelMm = maxTravelMm;
+  recomputeAxisDerived(a);
   a->gcodeRelativePos = 0;
 
   a->ena = ena;
@@ -300,6 +377,15 @@ unsigned long spindleEncTime = 0; // micros() of the previous spindle update
 unsigned long spindleEncTimeDiffBulk = 0; // micros() between RPM_BULK spindle updates
 unsigned long spindleEncTimeAtIndex0 = 0; // micros() when spindleEncTimeIndex was 0
 int spindleEncTimeIndex = 0; // counter going between 0 and RPM_BULK - 1
+bool encoderInvert = false; // Reverses the counting direction of the spindle encoder in software
+int encoderBacklash = ENCODER_BACKLASH; // Dead-band in counts, see the constant for what it does
+int encoderSpindleTeeth = ENCODER_SPINDLE_TEETH; // Spindle pulley teeth, for a belt-driven encoder
+int encoderPulleyTeeth = ENCODER_PULLEY_TEETH; // Encoder pulley teeth
+int encoderDivider = ENCODER_DIVIDER; // Counts folded into one step to steady a fluttering encoder
+int encoderDivRemainder = 0; // Counts not yet worth a step at the current divider
+long encoderReversals = 0; // Spurious direction changes seen by the counter, reset from the calibration screen
+int encoderLastDir = 0; // Sign of the last non-zero encoder delta, 0 until the first pulse
+long encoderRunLength = 0; // Counts accumulated since the last direction change
 long spindlePos = 0; // Spindle position
 long spindlePosAvg = 0; // Spindle position accounting for encoder backlash
 long savedSpindlePosAvg = 0; // spindlePosAvg saved in Preferences
@@ -314,9 +400,11 @@ volatile int pulse1Delta = 0; // Outstanding pulses generated by pulse generator
 volatile int pulse2Delta = 0; // Outstanding pulses generated by pulse generator on terminal A2.
 
 bool showAngle = false; // Whether to show 0-359 spindle angle on screen
-bool showTacho = false; // Whether to show spindle RPM on screen
+bool showTacho = false; // Whether to show spindle RPM and surface speed on screen
+bool showBigDro = false; // Whether to show Z and X positions in large 2-row digits
 bool savedShowAngle = false; // showAngle value saved in Preferences
 bool savedShowTacho = false; // showTacho value saved in Preferences
+bool savedShowBigDro = false; // showBigDro value saved in Preferences
 int shownRpm = 0;
 unsigned long shownRpmTime = 0; // micros() when shownRpm was set
 
@@ -426,6 +514,171 @@ byte customCharLimLeftRight[] = {
   B00000,
   B00000
 };
+const int customCharDiaCode = 7;
+byte customCharDia[] = {
+  B00001,
+  B01110,
+  B10011,
+  B10101,
+  B11001,
+  B01110,
+  B10000,
+  B00000
+};
+
+// Settings menu and thread database screens, both opened with the settings button.
+bool inSettings = false; // Whether the settings menu is shown
+// The settings menu is two levels. settingsSection is -1 while the directory of sections is
+// shown, and the index of the open section once one has been entered.
+int settingsSection = -1;
+int settingsDirIndex = 0; // Highlighted row in the directory
+bool inThreadPicker = false; // Whether the thread database is shown
+int settingsIndex = 0; // Selected item in the settings menu
+int threadPickerIndex = 0; // Selected item in the thread database
+long settingsLcdHash = LCD_HASH_INITIAL; // Hash of the currently drawn settings/thread screen
+
+// The menu items, their labels and their kinds live in settings_table.h, which also defines
+// SETTINGS_COUNT. Only reading and writing the underlying variable is per-item code below.
+
+long springPasses = 0; // Extra passes at final depth in turn/face/thread modes, 0 = off
+long peckDepthDu = 0; // Peck parting: back off to break the chip every this much infeed in cut-off mode, 0 = off
+bool flankInfeed = false; // Whether threading passes use 29.5-degree flank infeed instead of plunging
+long retractDu = 20000; // One-key retract & return distance in deci-microns
+long slotLeftReductionDu = 0; // Slotting: shorten each successive left stroke by this, 0 = full length
+bool xDiameterDisplay = false; // Show and enter X values as diameter instead of radius
+
+// WiFi access point and over-the-air updates. Read once during setup(), so changing wifiEnabled
+// takes a restart - the settings item says so.
+bool wifiEnabled = WIFI_ENABLED;
+long wifiPin = WIFI_PIN_DEFAULT; // WPA2 password, always exactly 8 digits
+bool wifiUp = false; // Whether the access point is actually running
+bool wifiRestart = false; // Set when the PIN changes, so a running access point picks it up
+// Set while firmware is being written. Flash writes disable the instruction cache and stall BOTH
+// cores, so no step pulse can be trusted for the duration - loop() bails out on this the same way
+// it does on an emergency stop.
+bool otaInProgress = false;
+int otaPercent = 0;
+
+// Calibration screen. Guided routines that measure machine values on the actual lathe and store
+// them under the same Preferences keys the settings menu uses, so calibrated and hand-entered
+// values stay interchangeable. Opened from the last settings menu item.
+#define CAL_PITCH_Z 0
+#define CAL_PITCH_X 1
+#define CAL_BACKLASH_Z 2
+#define CAL_BACKLASH_X 3
+#define CAL_DIR_Z 4
+#define CAL_DIR_X 5
+#define CAL_TRAVEL_Z 6
+#define CAL_TRAVEL_X 7
+#define CAL_SPEED_Z 8
+#define CAL_SPEED_X 9
+#define CAL_ENC_PPR 10
+#define CAL_ENC_DIR 11
+#define CAL_ENC_SIGNAL 12
+#define CAL_INPUTS 13
+
+// Routines 0-9 are axis-paired: even index is Z, odd is X, same convention as settingsAxis().
+const char* CAL_ROUTINES[] = {
+  "Z screw pitch", "X screw pitch", "Z backlash", "X backlash",
+  "Z direction", "X direction", "Z travel limit", "X travel limit",
+  "Z max speed", "X max speed", "Encoder PPR", "Encoder direction",
+  "Encoder signal", "Input tester",
+};
+const int CAL_ROUTINES_COUNT = sizeof(CAL_ROUTINES) / sizeof(CAL_ROUTINES[0]);
+
+// Nominal test distances for the screw pitch routine. Longer is more accurate.
+const long CAL_TEST_DU[] = {10000, 50000, 100000, 250000, 500000, 1000000};
+const int CAL_TEST_DU_COUNT = sizeof(CAL_TEST_DU) / sizeof(CAL_TEST_DU[0]);
+// Revolutions to turn the spindle through when deriving encoder PPR.
+const long CAL_REVS[] = {1, 5, 10, 20};
+const int CAL_REVS_COUNT = sizeof(CAL_REVS) / sizeof(CAL_REVS[0]);
+// The standard PPR table that measurements snap to lives in calibration_math.h.
+#define CAL_PITCH_PRELOAD_DU 10000 // 1mm move that loads the axis before the pitch test move
+#define CAL_BACKLASH_LOAD_DU 20000 // 2mm move used to take up the slack before measuring backlash
+#define CAL_DIR_MOVE_DU 50000 // 5mm move used to show which way an axis travels
+#define CAL_SPEED_STROKE_DU 200000 // 20mm back-and-forth stroke for the max speed ramp
+
+bool inCal = false; // Whether the calibration screen is shown
+int calRoutine = -1; // -1 = showing the routine list, otherwise the running CAL_* routine
+int calListIndex = 0; // Selected routine in the list
+int calStep = 0; // Step within the running routine
+long calRefPos = 0; // Axis pos snapshot taken at the start of a measurement
+long calRefSpindle = 0; // spindlePos snapshot for the encoder routines
+int calParamIndex = 0; // Index into CAL_TEST_DU or CAL_REVS, whichever the routine uses
+long calValue = 0; // Computed candidate value awaiting confirmation
+long calPrev = 0; // Previous trial value, used by the max speed ramp
+long calSaved = 0; // Original value stashed so aborting a routine can put it back
+long calLcdHash = LCD_HASH_INITIAL; // Hash of the currently drawn calibration screen
+int calLastKeyCode = -1; // Last key seen by the input tester
+bool calLastKeyPress = false; // Whether that key was a press or a release
+unsigned long calOffPressMs = 0; // millis() when OFF was pressed, for the hold-to-exit escape
+bool calDirMoved = false; // Whether the direction routine has completed its test move
+
+struct ThreadPreset {
+  const char* name;
+  long dupr; // pitch in deci-microns
+  int measure; // measurement system this thread is normally expressed in
+};
+
+const ThreadPreset THREAD_PRESETS[] = {
+  {"M3 coarse x0.5", 5000, MEASURE_METRIC},
+  {"M4 coarse x0.7", 7000, MEASURE_METRIC},
+  {"M5 coarse x0.8", 8000, MEASURE_METRIC},
+  {"M6 coarse x1.0", 10000, MEASURE_METRIC},
+  {"M8 coarse x1.25", 12500, MEASURE_METRIC},
+  {"M8 fine x1.0", 10000, MEASURE_METRIC},
+  {"M10 coarse x1.5", 15000, MEASURE_METRIC},
+  {"M10 fine x1.25", 12500, MEASURE_METRIC},
+  {"M12 coarse x1.75", 17500, MEASURE_METRIC},
+  {"M12 fine x1.5", 15000, MEASURE_METRIC},
+  {"M14 coarse x2.0", 20000, MEASURE_METRIC},
+  {"M16 coarse x2.0", 20000, MEASURE_METRIC},
+  {"M16 fine x1.5", 15000, MEASURE_METRIC},
+  {"M20 coarse x2.5", 25000, MEASURE_METRIC},
+  {"M24 coarse x3.0", 30000, MEASURE_METRIC},
+  {"1/4-20 UNC", 12700, MEASURE_TPI},
+  {"1/4-28 UNF", 9071, MEASURE_TPI},
+  {"5/16-18 UNC", 14111, MEASURE_TPI},
+  {"5/16-24 UNF", 10583, MEASURE_TPI},
+  {"3/8-16 UNC", 15875, MEASURE_TPI},
+  {"3/8-24 UNF", 10583, MEASURE_TPI},
+  {"7/16-14 UNC", 18143, MEASURE_TPI},
+  {"1/2-13 UNC", 19538, MEASURE_TPI},
+  {"1/2-20 UNF", 12700, MEASURE_TPI},
+  {"5/8-11 UNC", 23091, MEASURE_TPI},
+  {"5/8-18 UNF", 14111, MEASURE_TPI},
+  {"3/4-10 UNC", 25400, MEASURE_TPI},
+  {"3/4-16 UNF", 15875, MEASURE_TPI},
+  {"1-8 UNC", 31750, MEASURE_TPI},
+  {"G1/8 BSPP 28tpi", 9071, MEASURE_TPI},
+  {"G1/4 BSPP 19tpi", 13368, MEASURE_TPI},
+  {"G3/8 BSPP 19tpi", 13368, MEASURE_TPI},
+  {"G1/2 BSPP 14tpi", 18143, MEASURE_TPI},
+  {"G3/4 BSPP 14tpi", 18143, MEASURE_TPI},
+  {"G1 BSPP 11tpi", 23091, MEASURE_TPI},
+  {"Tr8x1.5 trap", 15000, MEASURE_METRIC},
+  {"Tr10x2 trap", 20000, MEASURE_METRIC},
+  {"Tr12x3 trap", 30000, MEASURE_METRIC},
+  {"Tr16x4 trap", 40000, MEASURE_METRIC},
+  {"Tr20x4 trap", 40000, MEASURE_METRIC},
+  {"1/4-16 ACME", 15875, MEASURE_TPI},
+  {"5/16-14 ACME", 18143, MEASURE_TPI},
+  {"3/8-12 ACME", 21167, MEASURE_TPI},
+  {"1/2-10 ACME", 25400, MEASURE_TPI},
+  {"5/8-8 ACME", 31750, MEASURE_TPI},
+  {"3/4-6 ACME", 42333, MEASURE_TPI},
+  {"1-5 ACME", 50800, MEASURE_TPI},
+  {"1/8-27 NPT", 9407, MEASURE_TPI},
+  {"1/4-18 NPT", 14111, MEASURE_TPI},
+  {"3/8-18 NPT", 14111, MEASURE_TPI},
+  {"1/2-14 NPT", 18143, MEASURE_TPI},
+  {"3/4-14 NPT", 18143, MEASURE_TPI},
+};
+const int THREAD_PRESETS_COUNT = sizeof(THREAD_PRESETS) / sizeof(THREAD_PRESETS[0]);
+
+// Thread database categories jumped to with numpad keys 1-6: the picker moves to the first
+// preset whose name contains the marker.
+const char* THREAD_CATEGORY_MARKERS[6] = {"M", "UN", "BSPP", "Tr", "ACME", "NPT"};
 
 String gcodeCommand = "";
 long gcodeFeedDuPerSec = GCODE_FEED_DEFAULT_DU_SEC;
@@ -436,6 +689,11 @@ bool gcodeInSemicolon = false;
 bool serialInKeycode = false;
 int serialKeycode = 0;
 String keycodeCommand = "";
+bool serialInSetting = false; // Reading a "$..." settings command up to the end of the line
+String settingCommand = "";
+// Flash wear instrumentation, reported by "$". Since boot, not persisted. Each batch is one
+// Preferences commit, so this is the number that maps to flash erase cycles.
+unsigned long nvsSaveBatches = 0;
 bool gcodeInSave = false;
 bool gcodeInSaveFirstLine = false;
 String gcodeSaveName = "";
@@ -560,6 +818,9 @@ int printAxisPos(Axis* a) {
   if (a->rotational) {
     return printDegrees(getAxisPosDu(a));
   }
+  if (a == &x && xDiameterDisplay) {
+    return printDeciMicrons(getAxisPosDu(a) * 2, 3);
+  }
   return printDeciMicrons(getAxisPosDu(a), 3);
 }
 
@@ -578,7 +839,12 @@ int printAxisStopDiff(Axis* a, bool addTrailingSpace) {
 
 int printAxisPosWithName(Axis* a, bool addTrailingSpace) {
   if (!a->active || a->disabled) return 0;
-  int count = lcd.print(a->name);
+  int count = 0;
+  if (a == &x && xDiameterDisplay && !a->rotational) {
+    count += lcd.write(customCharDiaCode);
+  } else {
+    count += lcd.print(a->name);
+  }
   count += printAxisPos(a);
   if (addTrailingSpace) {
     count += lcd.print(' ');
@@ -603,82 +869,331 @@ int printNoTrailing0(float value) {
   return lcd.print(value, points);
 }
 
+// Threading, straight or tapered. TPR is identical to THREAD everywhere except for one extra
+// setup step and the X drift applied during the cut, so almost everything asks this instead.
+bool isThreadMode() {
+  return mode == MODE_THREAD || mode == MODE_TPR;
+}
+
+// Spindle-synchronised continuous feed. Which axis it drives is the only difference between the
+// two: MODE_NORMAL feeds Z along the bed, MODE_XGEAR feeds X across the face.
+bool isGearboxMode() {
+  return mode == MODE_NORMAL || mode == MODE_XGEAR;
+}
+
 bool needZStops() {
-  return mode == MODE_TURN || mode == MODE_FACE || mode == MODE_THREAD || mode == MODE_ELLIPSE;
+  return mode == MODE_TURN || mode == MODE_FACE || isThreadMode() || mode == MODE_ELLIPSE ||
+      mode == MODE_SLOT;
 }
 
 bool isPassMode() {
-  return mode == MODE_TURN || mode == MODE_FACE || mode == MODE_CUT || mode == MODE_THREAD || mode == MODE_ELLIPSE;
+  return mode == MODE_TURN || mode == MODE_FACE || mode == MODE_CUT || isThreadMode() ||
+      mode == MODE_ELLIPSE || mode == MODE_SLOT;
 }
 
 bool manualMovesAllowedWhenOn() {
-  return mode == MODE_NORMAL || mode == MODE_ASYNC || mode == MODE_CONE || mode == MODE_A1;
+  return isGearboxMode() || mode == MODE_ASYNC || mode == MODE_CONE || mode == MODE_A1;
 }
 
 int getLastSetupIndex() {
   if (mode == MODE_CONE || mode == MODE_GCODE) return 2;
-  if (mode == MODE_TURN || mode == MODE_FACE || mode == MODE_CUT || mode == MODE_THREAD || mode == MODE_ELLIPSE) return 3;
+  if (mode == MODE_TPR) return 4; // passes, external/internal, cone ratio, go
+  if (isPassMode()) return 3;
   return 0;
 }
 
 Axis* getPitchAxis() {
-  return mode == MODE_FACE ? &x : &z;
+  return (mode == MODE_FACE || mode == MODE_XGEAR) ? &x : &z;
 }
 
 long getPassModeZStart() {
-  if (mode == MODE_TURN || mode == MODE_THREAD) return dupr > 0 ? z.rightStop : z.leftStop;
+  if (mode == MODE_TURN || isThreadMode()) return dupr > 0 ? z.rightStop : z.leftStop;
   if (mode == MODE_FACE) return auxForward ? z.rightStop : z.leftStop;
   if (mode == MODE_ELLIPSE) return dupr > 0 ? z.leftStop : z.rightStop;
+  // Slotting always starts at the right and cuts to the left, like a shaper stroke.
+  if (mode == MODE_SLOT) return z.rightStop;
   return z.pos;
 }
 
 long getPassModeXStart() {
-  if (mode == MODE_TURN || mode == MODE_THREAD) return auxForward ? x.rightStop : x.leftStop;
+  if (mode == MODE_TURN || isThreadMode()) return auxForward ? x.rightStop : x.leftStop;
   if (mode == MODE_FACE || mode == MODE_CUT) return dupr > 0 ? x.rightStop : x.leftStop;
   if (mode == MODE_ELLIPSE) return x.rightStop;
+  if (mode == MODE_SLOT) return auxForward ? x.rightStop : x.leftStop;
   return x.pos;
 }
 
-int printMode() {
-  if (mode == MODE_ASYNC) {
-    return lcd.print("ASY ");
-  } else if (mode == MODE_CONE) {
-    return lcd.print("CONE ");
-  } else if (mode == MODE_TURN) {
-    return lcd.print("TURN ");
-  } else if (mode == MODE_FACE) {
-    return lcd.print("FACE ");
-  } else if (mode == MODE_CUT) {
-    return lcd.print("CUT ");
-  } else if (mode == MODE_THREAD) {
-    return lcd.print("THRD ");
-  } else if (mode == MODE_ELLIPSE) {
-    return lcd.print("ELLI ");
-  } else if (mode == MODE_GCODE) {
-    return lcd.print("GCODE ");
-  } else if (mode == MODE_A1) {
-    return lcd.print("A1 ");
+// Name of the current mode. MODE_NORMAL is the plain gearbox and shows nothing on the LCD, which
+// is why this can return an empty string. Shared with the web status API so the two never disagree
+// about what the machine is doing.
+const char* modeName() {
+  switch (mode) {
+    case MODE_XGEAR: return "XGEAR";
+    case MODE_SLOT: return "SLOT";
+    case MODE_TPR: return "TPR";
+    case MODE_ASYNC: return "ASY";
+    case MODE_CONE: return "CONE";
+    case MODE_TURN: return "TURN";
+    case MODE_FACE: return "FACE";
+    case MODE_CUT: return "CUT";
+    case MODE_THREAD: return "THRD";
+    case MODE_ELLIPSE: return "ELLI";
+    case MODE_GCODE: return "GCODE";
+    case MODE_A1: return "A1";
+    default: return "";
   }
-  return 0;
+}
+
+// Whether pressing the same button again would land on a different mode. Gear hides XGEAR and
+// thread hides TPR, and nothing on the panel says so - hence the marker.
+bool modeHasSibling() {
+  return mode == MODE_NORMAL || mode == MODE_THREAD;
+}
+
+int printMode() {
+  const char* name = modeName();
+  if (name[0] == 0 && !modeHasSibling()) {
+    return 0;
+  }
+  int n = 0;
+  if (name[0] != 0) n += lcd.print(name);
+  // Plain ASCII, not a custom glyph: all 8 CGRAM slots are already spoken for.
+  if (modeHasSibling()) n += lcd.print("*");
+  return n + lcd.print(" ");
+}
+
+// Transient message shown on the bottom display line, mostly explaining why an input was refused.
+char splashBuf[21] = "";
+unsigned long splashUntilMs = 0;
+int splashId = 0; // Incremented per message so the display hash catches back-to-back splashes
+
+void splash(const char* text) {
+  strncpy(splashBuf, text, sizeof(splashBuf) - 1);
+  splashBuf[sizeof(splashBuf) - 1] = 0;
+  splashUntilMs = millis() + 1500;
+  splashId++;
+}
+
+bool splashActive() {
+  return millis() < splashUntilMs;
+}
+
+// A refused input: the message and the beep always travel together.
+void splashError(const char* text) {
+  splash(text);
+  beep();
+}
+
+// Deci-microns for a number just typed on the numpad, in the current measurement system.
+long numpadRawToDu(long raw) {
+  return calNumpadRawToDu(measure == MEASURE_INCH, raw);
+}
+
+// Big 3x2-cell digit font for the large DRO screen. Since the LCD only has 8 custom character
+// slots, shared with the normal screen's icons, the character set is swapped when (de)entering it.
+byte bigCharLT[] = {B00111, B01111, B11111, B11111, B11111, B11111, B11111, B11111};
+byte bigCharUB[] = {B11111, B11111, B11111, B00000, B00000, B00000, B00000, B00000};
+byte bigCharRT[] = {B11100, B11110, B11111, B11111, B11111, B11111, B11111, B11111};
+byte bigCharLL[] = {B11111, B11111, B11111, B11111, B11111, B11111, B01111, B00111};
+byte bigCharLB[] = {B00000, B00000, B00000, B00000, B00000, B11111, B11111, B11111};
+byte bigCharLR[] = {B11111, B11111, B11111, B11111, B11111, B11111, B11110, B11100};
+// Middle bar is 1px here and 2px in bigCharLMB below, so the crossbar totals 3px across the
+// cell boundary - the same weight as the top and bottom bars. It used to be 2px+2px, which made
+// the crossbar visibly fatter than every other stroke in the digit.
+byte bigCharUMB[] = {B11111, B11111, B11111, B00000, B00000, B00000, B00000, B11111};
+byte bigCharLMB[] = {B11111, B11111, B00000, B00000, B00000, B11111, B11111, B11111};
+
+// Cells of each digit: 3 top row cells, then 3 bottom row cells. 32 = space, 255 = full block.
+const byte BIG_DIGIT_CELLS[10][6] = {
+  {0, 1, 2, 3, 4, 5},         // 0
+  {32, 255, 32, 32, 255, 32}, // 1
+  {6, 6, 2, 3, 7, 7},         // 2
+  {6, 6, 2, 7, 7, 5},         // 3
+  {255, 4, 255, 32, 32, 255}, // 4
+  {255, 6, 6, 7, 7, 5},       // 5
+  {255, 6, 6, 3, 7, 5},       // 6
+  {1, 1, 2, 32, 32, 255},     // 7
+  {0, 6, 2, 3, 7, 5},         // 8
+  {0, 6, 2, 7, 7, 5},         // 9
+};
+
+bool lcdBigCharsLoaded = false;
+long bigDroHash = LCD_HASH_INITIAL;
+// Columns 0-13 of the large display hold the number, 14-19 the info strip.
+#define BIG_DRO_NUM_COLS 14
+
+void lcdLoadNormalChars() {
+  lcd.createChar(customCharMmCode, customCharMm);
+  lcd.createChar(customCharLimLeftCode, customCharLimLeft);
+  lcd.createChar(customCharLimRightCode, customCharLimRight);
+  lcd.createChar(customCharLimUpCode, customCharLimUp);
+  lcd.createChar(customCharLimDownCode, customCharLimDown);
+  lcd.createChar(customCharLimUpDownCode, customCharLimUpDown);
+  lcd.createChar(customCharLimLeftRightCode, customCharLimLeftRight);
+  lcd.createChar(customCharDiaCode, customCharDia);
+}
+
+void lcdLoadBigChars() {
+  lcd.createChar(0, bigCharLT);
+  lcd.createChar(1, bigCharUB);
+  lcd.createChar(2, bigCharRT);
+  lcd.createChar(3, bigCharLL);
+  lcd.createChar(4, bigCharLB);
+  lcd.createChar(5, bigCharLR);
+  lcd.createChar(6, bigCharUMB);
+  lcd.createChar(7, bigCharLMB);
+}
+
+void ensureLcdCharset(bool big) {
+  if (big == lcdBigCharsLoaded) return;
+  lcdBigCharsLoaded = big;
+  if (big) lcdLoadBigChars();
+  else lcdLoadNormalChars();
+  // The glyphs on screen just changed meaning, force a full redraw.
+  lcdHashLine0 = LCD_HASH_INITIAL;
+  bigDroHash = LCD_HASH_INITIAL;
+}
+
+// Renders an axis value in 2-row-tall digits on rows row and row + 1, right-aligned into the
+// columns left of the info strip. Always 4 digits so the strip never has to move, which means
+// 0.01mm below 100mm and 0.1mm above it (0.001" and 0.01" in imperial). The normal screen and
+// numpad entry keep full micron precision - only this screen trades the last digit for space,
+// and it is the digit that changes fastest and is least readable while an axis is moving.
+void printBigValue(int row, char label, long du) {
+  char buf[12];
+  float value = measure == MEASURE_METRIC ? du / 10000.0 : du / 254000.0;
+  float mag = fabs(value);
+  snprintf(buf, sizeof(buf), "%.*f", calBigDroPoints(measure == MEASURE_METRIC, mag), mag);
+  int col = calBigDroStartCol(BIG_DRO_NUM_COLS, calBigDroWidth(buf));
+
+  lcd.setCursor(0, row);
+  lcd.print(label);
+  lcd.setCursor(0, row + 1);
+  lcd.print(du < 0 ? '-' : ' ');
+  lcd.setCursor(1, row);
+  for (int i = 1; i < col; i++) lcd.print(' ');
+  lcd.setCursor(1, row + 1);
+  for (int i = 1; i < col; i++) lcd.print(' ');
+
+  for (int i = 0; buf[i] != 0 && col < BIG_DRO_NUM_COLS; i++) {
+    char c = buf[i];
+    if (c == '.') {
+      lcd.setCursor(col, row);
+      lcd.print(' ');
+      lcd.setCursor(col, row + 1);
+      lcd.print('.');
+      col++;
+    } else if (c >= '0' && c <= '9' && col + 3 <= BIG_DRO_NUM_COLS) {
+      const byte* cells = BIG_DIGIT_CELLS[c - '0'];
+      lcd.setCursor(col, row);
+      for (int j = 0; j < 3; j++) lcd.write(cells[j]);
+      lcd.setCursor(col, row + 1);
+      for (int j = 3; j < 6; j++) lcd.write(cells[j]);
+      col += 3;
+    }
+  }
+  lcd.setCursor(col, row);
+  for (int i = col; i < BIG_DRO_NUM_COLS; i++) lcd.print(' ');
+  lcd.setCursor(col, row + 1);
+  for (int i = col; i < BIG_DRO_NUM_COLS; i++) lcd.print(' ');
+}
+
+// Info strip down the right-hand side of the large position display.
+//
+// The disabled flags matter most. This screen shows commanded stepper travel, not a measured
+// carriage position - there is no scale on the axes - so the moment an axis is disabled and
+// hand-cranked, the big number beside it silently stops being true. The flag sits on that
+// axis's own rows so it is impossible to misread which number has gone stale.
+void printDroStrip() {
+  int n;
+  lcd.setCursor(BIG_DRO_NUM_COLS, 0);
+  n = z.disabled ? lcd.print(" Z OFF") : lcd.print("   rpm");
+  printLcdSpaces(BIG_DRO_NUM_COLS + n);
+
+  lcd.setCursor(BIG_DRO_NUM_COLS, 1);
+  n = lcd.print(" ");
+  n += lcd.print(getApproxRpm());
+  printLcdSpaces(BIG_DRO_NUM_COLS + n);
+
+  lcd.setCursor(BIG_DRO_NUM_COLS, 2);
+  n = x.disabled ? lcd.print(" X OFF") : lcd.print("  step");
+  printLcdSpaces(BIG_DRO_NUM_COLS + n);
+
+  lcd.setCursor(BIG_DRO_NUM_COLS, 3);
+  n = lcd.print(" ");
+  n += printDeciMicrons(moveStep, 5);
+  printLcdSpaces(BIG_DRO_NUM_COLS + n);
+}
+
+void updateBigDroDisplay() {
+  long zDu = getAxisPosDu(&z);
+  long xDu = getAxisPosDu(&x) * (xDiameterDisplay ? 2 : 1);
+  long newHash = zDu + xDu * 7 + measure * 3 + getApproxRpm() * 11L + moveStep * 13L
+      + (z.disabled ? 101 : 0) + (x.disabled ? 202 : 0);
+  if (newHash == bigDroHash) return;
+  bigDroHash = newHash;
+  printBigValue(0, 'Z', zDu);
+  // All 8 custom character slots hold the big font here, so the diameter symbol the normal
+  // screen uses isn't available. 'D' still says unambiguously that this is a diameter, which
+  // matters: the value is doubled and an X label would read as a radius.
+  printBigValue(2, xDiameterDisplay ? 'D' : 'X', xDu);
+  printDroStrip();
+}
+
+// Startup screen: name, version and a summary of the active hardware settings so a wrong
+// config (e.g. after a settings change) can be spotted before making chips.
+void showStartupScreen() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("NanoEls H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION));
+  lcd.setCursor(0, 1);
+  lcd.print("Encoder PPR " + String(encoderPpr));
+  lcd.setCursor(0, 2);
+  lcd.print("Z ");
+  printNoTrailing0(z.screwPitch / 10000.0);
+  lcd.write(customCharMmCode);
+  lcd.print(" " + String(long(round(z.motorSteps))) + "step");
+  lcd.setCursor(0, 3);
+  lcd.print("X ");
+  printNoTrailing0(x.screwPitch / 10000.0);
+  lcd.write(customCharMmCode);
+  lcd.print(" " + String(long(round(x.motorSteps))) + "step");
+  lcdHashLine0 = LCD_HASH_INITIAL;
+  lcdHashLine1 = LCD_HASH_INITIAL;
+  lcdHashLine2 = LCD_HASH_INITIAL;
+  lcdHashLine3 = LCD_HASH_INITIAL;
+  delay(2000);
 }
 
 void updateDisplay() {
-  int rpm = showTacho ? getApproxRpm() : 0;
-  int charIndex = 0;
-
+  // Firmware is being written: nothing else may draw, and nothing else is worth showing.
+  if (otaInProgress) {
+    updateOtaDisplay();
+    return;
+  }
   if (splashScreen) {
     splashScreen = false;
-    lcd.clear();
-    lcd.setCursor(6, 1);
-    lcd.print("NanoEls");
-    lcd.setCursor(6, 2);
-    lcd.print("H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION));
-    lcdHashLine0 = LCD_HASH_INITIAL;
-    lcdHashLine1 = LCD_HASH_INITIAL;
-    lcdHashLine2 = LCD_HASH_INITIAL;
-    lcdHashLine3 = LCD_HASH_INITIAL;
-    delay(2000);
+    ensureLcdCharset(false);
+    showStartupScreen();
   }
+  if (inCal) {
+    ensureLcdCharset(false);
+    updateCalDisplay();
+    return;
+  }
+  if (inSettings || inThreadPicker) {
+    ensureLcdCharset(false);
+    updateSettingsDisplay();
+    return;
+  }
+  if (showBigDro && !inNumpad && !splashActive() && setupIndex == 0 && (!isOn || mode == MODE_NORMAL)) {
+    ensureLcdCharset(true);
+    updateBigDroDisplay();
+    return;
+  }
+  ensureLcdCharset(false);
+  int rpm = showTacho ? getApproxRpm() : 0;
+  int charIndex = 0;
   if (lcdHashLine0 == LCD_HASH_INITIAL) {
     // First run after reset.
     lcd.clear();
@@ -768,8 +1283,9 @@ void updateDisplay() {
     gcodeCommandHash += gcodeCommand.charAt(i);
   }
   bool spindleStopped = micros() > spindleEncTime + 100000;
-  long newHashLine3 = z.pos + (showAngle ? spindlePos : -1) + (showTacho ? rpm : -2) + measure + (numpadResult > 0 ? numpadResult : -1) + mode * 5 + dupr +
-      (mode == MODE_CONE ? round(coneRatio * 10000) : 0) + turnPasses + opIndex + setupIndex + gcodeProgramIndex + gcodeProgramCount + spindleStopped * 3 + (isOn ? 139 : -117) + (inNumpad ? 10 : 0) + (auxForward ? 17 : -31) +
+  long newHashLine3 = z.pos + (showAngle ? spindlePos : -1) + (showTacho ? rpm + x.originPos : -2) + (splashActive() ? splashId * 7919 : -3) +
+      (joystickUse && joystickPinActive[4] ? 2000 + joystickDirPressed[0] + 2 * joystickDirPressed[1] + 4 * joystickDirPressed[2] + 8 * joystickDirPressed[3] : 0) + measure + (numpadResult > 0 ? numpadResult : -1) + mode * 5 + dupr +
+      (mode == MODE_CONE ? round(coneRatio * 10000) : 0) + turnPasses + opIndex + setupIndex + gcodeProgramIndex + gcodeProgramCount + spindleStopped * 3 + (isOn ? 139 : -117) + (inNumpad ? 10 : 0) + (auxForward ? 17 : -31) + (xRetracted ? 55 : 0) +
       (z.leftStop == LONG_MAX ? 123 : z.leftStop) + (z.rightStop == LONG_MIN ? 1234 : z.rightStop) +
       (x.leftStop == LONG_MAX ? 1235 : x.leftStop) + (x.rightStop == LONG_MIN ? 123456 : x.rightStop) + gcodeCommandHash +
       (mode == MODE_A1 ? a1.pos + a1.originPos + (a1.leftStop == LONG_MAX ? 123 : a1.leftStop) + (a1.rightStop == LONG_MIN ? 1234 : a1.rightStop) + a1.disabled : 0) + x.pos + z.pos;
@@ -777,7 +1293,9 @@ void updateDisplay() {
     lcdHashLine3 = newHashLine3;
     charIndex = 0;
     lcd.setCursor(0, 3);
-    if (mode == MODE_A1 && !inNumpad) {
+    if (splashActive()) {
+      charIndex += lcd.print(splashBuf);
+    } else if (mode == MODE_A1 && !inNumpad) {
       if (a1.leftStop != LONG_MAX && a1.rightStop != LONG_MIN) {
         charIndex += lcd.write(customCharLimUpDownCode);
         charIndex += lcd.print(" ");
@@ -831,7 +1349,18 @@ void updateDisplay() {
         } else {
           charIndex += lcd.print(auxForward ? "External?" : "Internal?");
         }
-      } else if (!isOn && setupIndex == 3) {
+      } else if (!isOn && mode == MODE_TPR && setupIndex == 3) {
+        // Only the tapered thread asks for this; a straight thread never sees the step.
+        if (numpadResult != 0) {
+          charIndex += lcd.print("Use ratio ");
+          charIndex += lcd.print(numpadToConeRatio(), 5);
+          charIndex += lcd.print("?");
+        } else {
+          charIndex += lcd.print("Taper ratio ");
+          charIndex += printNoTrailing0(coneRatio);
+          charIndex += lcd.print("?");
+        }
+      } else if (!isOn && setupIndex == getLastSetupIndex()) {
         long zOffset = getPassModeZStart() - z.pos;
         long xOffset = getPassModeXStart() - x.pos;
         charIndex += lcd.print("Go");
@@ -847,10 +1376,19 @@ void updateDisplay() {
         }
         charIndex += lcd.print("?");
       } else if (isOn && numpadResult == 0) {
-        charIndex += lcd.print("Pass ");
+        long springTotal = (mode == MODE_TURN || mode == MODE_FACE || isThreadMode()) ? springPasses * starts : 0;
+        long total = max(opIndex, long(turnPasses * starts) + springTotal);
+        charIndex += lcd.print(opIndex > turnPasses * starts ? "Spring " : "Pass ");
         charIndex += lcd.print(opIndex);
         charIndex += lcd.print(" of ");
-        charIndex += lcd.print(max(opIndex, long(turnPasses * starts)));
+        charIndex += lcd.print(total);
+        // Completed passes as a progress bar in the remaining space.
+        charIndex += lcd.print(" ");
+        long barCols = 20 - charIndex;
+        long filled = total > 0 ? min(barCols, barCols * (opIndex - 1) / total) : 0;
+        for (long i = 0; i < filled; i++) {
+          charIndex += lcd.write(byte(255));
+        }
       }
     } else if (mode == MODE_CONE) {
       if (numpadResult != 0 && setupIndex == 1) {
@@ -879,14 +1417,39 @@ void updateDisplay() {
 
     if (charIndex > 0) {
       // No space for shared RPM/angle text.
+    } else if (joystickUse && joystickPinActive[4]) {
+      // The joystick move button is held - show what the pendant is driving.
+      charIndex += lcd.print("Jog");
+      bool anyDir = false;
+      for (int i = 0; i < 4; i++) {
+        if (!joystickDirPressed[i]) continue;
+        anyDir = true;
+        int key = JOYSTICK_DIR_PIN_KEYS[i][1];
+        charIndex += lcd.print(key == B_LEFT ? " Z<" : key == B_RIGHT ? " Z>" : key == B_UP ? " X^" : " Xv");
+      }
+      if (!anyDir) {
+        charIndex += lcd.print(" ready");
+      }
+    } else if (xRetracted) {
+      charIndex += lcd.print("X retracted");
     } else if (showAngle) {
       charIndex += lcd.print("Angle ");
       charIndex += lcd.print(spindleModulo(spindlePos) * 360 / ENCODER_STEPS_FLOAT, 2);
       charIndex += lcd.print(char(223));
     } else if (showTacho) {
-      charIndex += lcd.print("Tacho ");
       charIndex += lcd.print(rpm);
       charIndex += lcd.print("rpm");
+      // Surface speed from RPM and diameter. Only accurate if X was zeroed on the lathe centerline.
+      float diameterMm = abs(getAxisPosDu(&x)) * 2 / 10000.0;
+      float metersPerMin = PI * diameterMm / 1000.0 * rpm;
+      charIndex += lcd.print(" ");
+      if (measure == MEASURE_METRIC) {
+        charIndex += lcd.print(metersPerMin, 0);
+        charIndex += lcd.print("m/min");
+      } else {
+        charIndex += lcd.print(metersPerMin * 3.28084, 0);
+        charIndex += lcd.print("ft/min");
+      }
     }
     printLcdSpaces(charIndex);
   }
@@ -900,8 +1463,8 @@ void IRAM_ATTR pulse1Enc() {
   unsigned long now = micros();
   if (DREAD(A12)) {
     pulse1HighMicros = now;
-  } else if (now > pulse1HighMicros + PULSE_MIN_WIDTH_US) {
-    pulse1Delta += (DREAD(A13) ? -1 : 1) * (PULSE_1_INVERT ? -1 : 1);
+  } else if (now > pulse1HighMicros + pulseMinWidthUs) {
+    pulse1Delta += (DREAD(A13) ? -1 : 1) * (pulse1Invert ? -1 : 1);
   }
 }
 
@@ -910,8 +1473,8 @@ void IRAM_ATTR pulse2Enc() {
   unsigned long now = micros();
   if (DREAD(A22)) {
     pulse2HighMicros = now;
-  } else if (now > pulse2HighMicros + PULSE_MIN_WIDTH_US) {
-    pulse2Delta += (DREAD(A23) ? -1 : 1) * (PULSE_2_INVERT ? -1 : 1);
+  } else if (now > pulse2HighMicros + pulseMinWidthUs) {
+    pulse2Delta += (DREAD(A23) ? -1 : 1) * (pulse2Invert ? -1 : 1);
   }
 }
 
@@ -924,8 +1487,16 @@ void setAsyncTimerEnable(bool value) {
 }
 
 void taskDisplay(void *param) {
+  unsigned long lastLcdMs = 0;
   while (emergencyStop == ESTOP_NONE) {
-    updateDisplay();
+    // Rate-limited rather than free-running: see LCD_MIN_UPDATE_MS. The per-line hashes already
+    // skip unchanged content, but without this a value that changes every loop gets rewritten
+    // faster than it can be read or the display can settle.
+    unsigned long nowMs = millis();
+    if (nowMs - lastLcdMs >= LCD_MIN_UPDATE_MS) {
+      lastLcdMs = nowMs;
+      updateDisplay();
+    }
     // Calling Preferences.commit() blocks all interrupts for 30ms, don't call saveIfChanged() if
     // encoder is likely to move soon.
     unsigned long now = micros();
@@ -1001,7 +1572,7 @@ long getMoveStepForAxis(Axis* a) {
 }
 
 long getStepMaxSpeed(Axis* a) {
-  return isContinuousStep() ? a->speedManualMove : min(long(a->speedManualMove), abs(getMoveStepForAxis(a)) * 1000 / STEP_TIME_MS);
+  return isContinuousStep() ? a->speedManualMove : min(long(a->speedManualMove), abs(getMoveStepForAxis(a)) * 1000 / stepTimeMs);
 }
 
 void waitForStep(Axis* a) {
@@ -1012,34 +1583,34 @@ void waitForStep(Axis* a) {
     // Move with tiny pauses allowing to stop precisely.
     a->continuous = false;
     waitForPendingPos0(a);
-    DELAY(DELAY_BETWEEN_STEPS_MS);
+    DELAY(delayBetweenStepsMs);
   }
 }
 
 int getAndResetPulses(Axis* a) {
   int delta = 0;
   if (PULSE_1_AXIS == a->name) {
-    if (pulse1Delta < -PULSE_HALF_BACKLASH) {
+    if (pulse1Delta < -pulseHalfBacklash) {
       noInterrupts();
-      delta = pulse1Delta + PULSE_HALF_BACKLASH;
-      pulse1Delta = -PULSE_HALF_BACKLASH;
+      delta = pulse1Delta + pulseHalfBacklash;
+      pulse1Delta = -pulseHalfBacklash;
       interrupts();
-    } else if (pulse1Delta > PULSE_HALF_BACKLASH) {
+    } else if (pulse1Delta > pulseHalfBacklash) {
       noInterrupts();
-      delta = pulse1Delta - PULSE_HALF_BACKLASH;
-      pulse1Delta = PULSE_HALF_BACKLASH;
+      delta = pulse1Delta - pulseHalfBacklash;
+      pulse1Delta = pulseHalfBacklash;
       interrupts();
     }
   } else if (PULSE_2_AXIS == a->name) {
-    if (pulse2Delta < -PULSE_HALF_BACKLASH) {
+    if (pulse2Delta < -pulseHalfBacklash) {
       noInterrupts();
-      delta = pulse2Delta + PULSE_HALF_BACKLASH;
-      pulse2Delta = -PULSE_HALF_BACKLASH;
+      delta = pulse2Delta + pulseHalfBacklash;
+      pulse2Delta = -pulseHalfBacklash;
       interrupts();
-    } else if (pulse2Delta > PULSE_HALF_BACKLASH) {
+    } else if (pulse2Delta > pulseHalfBacklash) {
       noInterrupts();
-      delta = pulse2Delta - PULSE_HALF_BACKLASH;
-      pulse2Delta = PULSE_HALF_BACKLASH;
+      delta = pulse2Delta - pulseHalfBacklash;
+      pulse2Delta = pulseHalfBacklash;
       interrupts();
     }
   }
@@ -1106,7 +1677,7 @@ void taskMoveZ(void *param) {
       z.speedMax = getStepMaxSpeed(&z);
       int delta = 0;
       do {
-        float fractionalDelta = (pulseDelta == 0 ? moveStep * sign / z.screwPitch : pulseDelta / PULSE_PER_REVOLUTION) * z.motorSteps + z.fractionalPos;
+        float fractionalDelta = (pulseDelta == 0 ? moveStep * sign / z.screwPitch : pulseDelta / pulsePerRevolution) * z.motorSteps + z.fractionalPos;
         delta = round(fractionalDelta);
         // Don't lose fractional steps when moving by 0.01" or 0.001".
         z.fractionalPos = fractionalDelta - delta;
@@ -1169,7 +1740,7 @@ void taskMoveX(void *param) {
     int delta = 0;
     int sign = up ? 1 : -1;
     do {
-      float fractionalDelta = (pulseDelta == 0 ? moveStep * sign / x.screwPitch : pulseDelta / PULSE_PER_REVOLUTION) * x.motorSteps + x.fractionalPos;
+      float fractionalDelta = (pulseDelta == 0 ? moveStep * sign / x.screwPitch : pulseDelta / pulsePerRevolution) * x.motorSteps + x.fractionalPos;
       delta = round(fractionalDelta);
       // Don't lose fractional steps when moving by 0.01" or 0.001".
       x.fractionalPos = fractionalDelta - delta;
@@ -1274,6 +1845,15 @@ void taskGcode(void *param) {
     if (charCode > 0) {
       if (gcodeInBrace) {
         if (receivedChar == ')') gcodeInBrace = false;
+      } else if (serialInSetting) {
+        // "$" then an optional key=value, up to the end of the line.
+        if (charCode < 32) {
+          serialInSetting = false;
+          applySettingCommand(settingCommand);
+          settingCommand = "";
+        } else {
+          settingCommand += receivedChar;
+        }
       } else if (serialInKeycode) {
         if (charCode < 32) {
           if (serialKeycode == 0) {
@@ -1297,6 +1877,9 @@ void taskGcode(void *param) {
         setIsOnFromTask(false);
       } else if (receivedChar == '~' /* resume */) {
         setIsOnFromTask(true);
+      } else if (receivedChar == '$' /* dump settings, or set one with $key=value */) {
+        serialInSetting = true;
+        settingCommand = "";
       } else if (receivedChar == '%' /* start/end marker */) {
         // Not using % markers in this implementation.
       } else if (receivedChar == '?' /* status */) {
@@ -1457,21 +2040,51 @@ bool removeAllGcode() {
   return true;
 }
 
+// Full 4x quadrature decode, using both channels of the PCNT unit.
+//
+// This replaces a single-channel 2x decode that counted only channel A's edges and took the
+// direction from channel B's *level* at that instant. Direction sampled from a level rather
+// than derived from the state sequence has a real failure mode: an A edge arriving while B sits
+// near its threshold can be counted either way, so a shaft parked in the transition region
+// walks the count in one direction instead of dithering harmlessly around it. That is exactly
+// where hand-turning leaves the spindle - moving slowly, in the transition region, with
+// vibration - which is why the carriage twitched by hand but threaded cleanly under power.
+//
+// Counting both channels' edges means every transition is accounted for, so an excursion that
+// returns to the same state nets to zero no matter which order the edges arrived in.
 void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
-  pcnt_config_t pcntConfig;
-  pcntConfig.pulse_gpio_num = gpioA;
-  pcntConfig.ctrl_gpio_num = gpioB;
-  pcntConfig.channel = PCNT_CHANNEL_0;
-  pcntConfig.unit = unit;
-  pcntConfig.pos_mode = PCNT_COUNT_INC;
-  pcntConfig.neg_mode = PCNT_COUNT_DEC;
-  pcntConfig.lctrl_mode = PCNT_MODE_REVERSE;
-  pcntConfig.hctrl_mode = PCNT_MODE_KEEP;
-  pcntConfig.counter_h_lim = PCNT_LIM;
-  pcntConfig.counter_l_lim = -PCNT_LIM;
-  pcnt_unit_config(&pcntConfig);
-  pcnt_set_filter_value(unit, ENCODER_FILTER);
-	pcnt_filter_enable(unit);
+  // Channel 0 counts A's edges, using B to tell which way the shaft turned.
+  pcnt_config_t chA;
+  chA.pulse_gpio_num = gpioA;
+  chA.ctrl_gpio_num = gpioB;
+  chA.channel = PCNT_CHANNEL_0;
+  chA.unit = unit;
+  chA.pos_mode = PCNT_COUNT_DEC;
+  chA.neg_mode = PCNT_COUNT_INC;
+  chA.lctrl_mode = PCNT_MODE_REVERSE;
+  chA.hctrl_mode = PCNT_MODE_KEEP;
+  chA.counter_h_lim = PCNT_LIM;
+  chA.counter_l_lim = -PCNT_LIM;
+  pcnt_unit_config(&chA);
+
+  // Channel 1 does the mirror image: B's edges, direction from A. Together the two cover all
+  // four transitions of the quadrature cycle.
+  pcnt_config_t chB;
+  chB.pulse_gpio_num = gpioB;
+  chB.ctrl_gpio_num = gpioA;
+  chB.channel = PCNT_CHANNEL_1;
+  chB.unit = unit;
+  chB.pos_mode = PCNT_COUNT_INC;
+  chB.neg_mode = PCNT_COUNT_DEC;
+  chB.lctrl_mode = PCNT_MODE_REVERSE;
+  chB.hctrl_mode = PCNT_MODE_KEEP;
+  chB.counter_h_lim = PCNT_LIM;
+  chB.counter_l_lim = -PCNT_LIM;
+  pcnt_unit_config(&chB);
+
+  // The filter applies to the unit's inputs, so its RPM ceiling is unchanged by the decode mode.
+  pcnt_set_filter_value(unit, encoderFilter);
+  pcnt_filter_enable(unit);
   pcnt_counter_pause(unit);
   pcnt_counter_clear(unit);
   pcnt_counter_resume(unit);
@@ -1480,8 +2093,8 @@ void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
 // Attaching interrupt on core 0 to have more time on core 1 where axes are moved.
 void taskAttachInterrupts(void *param) {
   startPulseCounter(PCNT_UNIT_0, ENC_A, ENC_B);
-  if (PULSE_1_USE) attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
-  if (PULSE_2_USE) attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
+  if (pulse1Use) attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
+  if (pulse2Use) attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
   vTaskDelete(NULL);
 }
 
@@ -1516,18 +2129,24 @@ void setup() {
 
   pinMode(BUZZ, OUTPUT);
 
-  if (PULSE_1_USE) {
+  if (pulse1Use) {
     pinMode(A11, OUTPUT);
     pinMode(A12, INPUT);
     pinMode(A13, INPUT);
     DLOW(A11);
   }
 
-  if (PULSE_2_USE) {
+  if (pulse2Use) {
     pinMode(A21, OUTPUT);
     pinMode(A22, INPUT);
     pinMode(A23, INPUT);
     DLOW(A21);
+  }
+
+  if (joystickUse) {
+    for (int i = 0; i < 6; i++) {
+      pinMode(joystickPin(i), INPUT_PULLUP);
+    }
   }
 
   Preferences pref;
@@ -1540,6 +2159,41 @@ void setup() {
   initAxis(&z, NAME_Z, true, false, MOTOR_STEPS_Z, SCREW_Z_DU, SPEED_START_Z, SPEED_MANUAL_MOVE_Z, ACCELERATION_Z, INVERT_Z, NEEDS_REST_Z, MAX_TRAVEL_MM_Z, BACKLASH_DU_Z, Z_ENA, Z_DIR, Z_STEP);
   initAxis(&x, NAME_X, true, false, MOTOR_STEPS_X, SCREW_X_DU, SPEED_START_X, SPEED_MANUAL_MOVE_X, ACCELERATION_X, INVERT_X, NEEDS_REST_X, MAX_TRAVEL_MM_X, BACKLASH_DU_X, X_ENA, X_DIR, X_STEP);
   initAxis(&a1, NAME_A1, ACTIVE_A1, ROTARY_A1, MOTOR_STEPS_A1, SCREW_A1_DU, SPEED_START_A1, SPEED_MANUAL_MOVE_A1, ACCELERATION_A1, INVERT_A1, NEEDS_REST_A1, MAX_TRAVEL_MM_A1, BACKLASH_DU_A1, A11, A12, A13);
+  z.motorTeeth = MOTOR_TEETH_Z; z.screwTeeth = SCREW_TEETH_Z; recomputeAxisDerived(&z);
+  x.motorTeeth = MOTOR_TEETH_X; x.screwTeeth = SCREW_TEETH_X; recomputeAxisDerived(&x);
+  a1.motorTeeth = MOTOR_TEETH_A1; a1.screwTeeth = SCREW_TEETH_A1; recomputeAxisDerived(&a1);
+
+  // Hardware parameters changed in the settings menu override the compiled-in defaults.
+  loadAxisSettings(&z, &pref);
+  loadAxisSettings(&x, &pref);
+  encoderPpr = pref.getLong(PREF_ENCODER_PPR, ENCODER_PPR);
+  encoderSpindleTeeth = pref.getLong(PREF_ENCODER_SPINDLE_TEETH, ENCODER_SPINDLE_TEETH);
+  encoderPulleyTeeth = pref.getLong(PREF_ENCODER_PULLEY_TEETH, ENCODER_PULLEY_TEETH);
+  encoderDivider = pref.getLong(PREF_ENCODER_DIVIDER, ENCODER_DIVIDER);
+  encoderBacklash = pref.getLong(PREF_ENCODER_BACKLASH, ENCODER_BACKLASH);
+  encoderFilter = pref.getLong("eflt", ENCODER_FILTER);
+  safeDistanceDu = pref.getLong("safe", SAFE_DISTANCE_DU);
+  pulse1Use = pref.getBool("p1u", PULSE_1_USE);
+  pulse1Invert = pref.getBool("p1i", PULSE_1_INVERT);
+  pulse2Use = pref.getBool("p2u", PULSE_2_USE);
+  pulse2Invert = pref.getBool("p2i", PULSE_2_INVERT);
+  pulsePerRevolution = pref.getLong("hppr", (long) PULSE_PER_REVOLUTION);
+  pulseMinWidthUs = pref.getLong("pmw", PULSE_MIN_WIDTH_US);
+  pulseHalfBacklash = pref.getLong("phb", PULSE_HALF_BACKLASH);
+  joystickUse = pref.getBool("joy", JOYSTICK_USE);
+  joystickDebounceMs = pref.getLong("jdb", (long) JOYSTICK_DEBOUNCE_MS);
+  stepTimeMs = pref.getLong("stm", STEP_TIME_MS);
+  delayBetweenStepsMs = pref.getLong("sdl", DELAY_BETWEEN_STEPS_MS);
+  applyEncoderPpr();
+  springPasses = pref.getLong(PREF_SPRING_PASSES, springPasses);
+  peckDepthDu = pref.getLong(PREF_PECK_DEPTH, peckDepthDu);
+  flankInfeed = pref.getBool(PREF_FLANK_INFEED, flankInfeed);
+  retractDu = pref.getLong(PREF_RETRACT_DIST, retractDu);
+  slotLeftReductionDu = pref.getLong("slt", slotLeftReductionDu);
+  xDiameterDisplay = pref.getBool(PREF_X_DIAMETER, xDiameterDisplay);
+  encoderInvert = pref.getBool(PREF_ENCODER_INVERT, encoderInvert);
+  wifiEnabled = pref.getBool("wfen", WIFI_ENABLED);
+  wifiPin = pref.getLong("wfpw", WIFI_PIN_DEFAULT);
 
   isOn = false;
   savedDupr = dupr = pref.getLong(PREF_DUPR);
@@ -1572,6 +2226,7 @@ void setup() {
   savedSpindlePosGlobal = spindlePosGlobal = pref.getLong(PREF_SPINDLE_POS_GLOBAL);
   savedShowAngle = showAngle = pref.getBool(PREF_SHOW_ANGLE);
   savedShowTacho = showTacho = pref.getBool(PREF_SHOW_TACHO);
+  savedShowBigDro = showBigDro = pref.getBool(PREF_SHOW_BDRO);
   savedMoveStep = moveStep = pref.getLong(PREF_MOVE_STEP, MOVE_STEP_1);
   setModeFromLoop(savedMode = pref.getInt(PREF_MODE));
   savedMeasure = measure = pref.getInt(PREF_MEASURE);
@@ -1602,13 +2257,7 @@ void setup() {
   pref.end();
 
   lcd.begin(LCD_COLUMNS, LCD_ROWS);
-  lcd.createChar(customCharMmCode, customCharMm);
-  lcd.createChar(customCharLimLeftCode, customCharLimLeft);
-  lcd.createChar(customCharLimRightCode, customCharLimRight);
-  lcd.createChar(customCharLimUpCode, customCharLimUp);
-  lcd.createChar(customCharLimDownCode, customCharLimDown);
-  lcd.createChar(customCharLimUpDownCode, customCharLimUpDown);
-  lcd.createChar(customCharLimLeftRightCode, customCharLimLeftRight);
+  lcdLoadNormalChars();
 
   Serial.begin(115200);
 
@@ -1637,12 +2286,15 @@ void setup() {
   if (a1.active) xTaskCreatePinnedToCore(taskMoveA1, "taskMoveA1", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
   xTaskCreatePinnedToCore(taskAttachInterrupts, "taskAttachInterrupts", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
   xTaskCreatePinnedToCore(taskGcode, "taskGcode", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
+  // Always created, but it does nothing at all until the WiFi setting is switched on - that is
+  // what lets the radio be started and stopped from the panel without a power cycle.
+  xTaskCreatePinnedToCore(taskWeb, "taskWeb", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
 }
 
 bool saveIfChanged() {
   // Should avoid calling Preferences whenever possible to reduce memory wear and avoid ~20ms write delay that blocks interrupts.
   if (dupr == savedDupr && starts == savedStarts && z.pos == z.savedPos && z.originPos == z.savedOriginPos && z.posGlobal == z.savedPosGlobal && z.motorPos == z.savedMotorPos && z.leftStop == z.savedLeftStop && z.rightStop == z.savedRightStop && z.disabled == z.savedDisabled &&
-      spindlePos == savedSpindlePos && spindlePosAvg == savedSpindlePosAvg && spindlePosSync == savedSpindlePosSync && savedSpindlePosGlobal == spindlePosGlobal && showAngle == savedShowAngle && showTacho == savedShowTacho && moveStep == savedMoveStep &&
+      spindlePos == savedSpindlePos && spindlePosAvg == savedSpindlePosAvg && spindlePosSync == savedSpindlePosSync && savedSpindlePosGlobal == spindlePosGlobal && showAngle == savedShowAngle && showTacho == savedShowTacho && showBigDro == savedShowBigDro && moveStep == savedMoveStep &&
       mode == savedMode && measure == savedMeasure && x.pos == x.savedPos && x.originPos == x.savedOriginPos && x.posGlobal == x.savedPosGlobal && x.motorPos == x.savedMotorPos && x.leftStop == x.savedLeftStop && x.rightStop == x.savedRightStop && x.disabled == x.savedDisabled &&
       a1.pos == a1.savedPos && a1.originPos == a1.savedOriginPos && a1.posGlobal == a1.savedPosGlobal && a1.motorPos == a1.savedMotorPos && a1.leftStop == a1.savedLeftStop && a1.rightStop == a1.savedRightStop && a1.disabled == a1.savedDisabled &&
       coneRatio == savedConeRatio && turnPasses == savedTurnPasses && savedAuxForward == auxForward) return false;
@@ -1664,6 +2316,7 @@ bool saveIfChanged() {
   if (spindlePosGlobal != savedSpindlePosGlobal) pref.putLong(PREF_SPINDLE_POS_GLOBAL, savedSpindlePosGlobal = spindlePosGlobal);
   if (showAngle != savedShowAngle) pref.putBool(PREF_SHOW_ANGLE, savedShowAngle = showAngle);
   if (showTacho != savedShowTacho) pref.putBool(PREF_SHOW_TACHO, savedShowTacho = showTacho);
+  if (showBigDro != savedShowBigDro) pref.putBool(PREF_SHOW_BDRO, savedShowBigDro = showBigDro);
   if (moveStep != savedMoveStep) pref.putLong(PREF_MOVE_STEP, savedMoveStep = moveStep);
   if (mode != savedMode) pref.putInt(PREF_MODE, savedMode = mode);
   if (measure != savedMeasure) pref.putInt(PREF_MEASURE, savedMeasure = measure);
@@ -1685,6 +2338,7 @@ bool saveIfChanged() {
   if (turnPasses != savedTurnPasses) pref.putInt(PREF_TURN_PASSES, savedTurnPasses = turnPasses);
   if (auxForward != savedAuxForward) pref.putBool(PREF_AUX_FORWARD, savedAuxForward = auxForward);
   pref.end();
+  nvsSaveBatches++;
   return true;
 }
 
@@ -1833,7 +2487,7 @@ void setModeFromLoop(int value) {
   if (isOn) {
     setIsOnFromLoop(false);
   }
-  if (mode == MODE_THREAD) {
+  if (isThreadMode()) {
     setStarts(1);
   } else if (mode == MODE_ASYNC || mode == MODE_A1) {
     setAsyncTimerEnable(false);
@@ -1907,8 +2561,10 @@ void reset() {
   measure = MEASURE_METRIC;
   showTacho = false;
   showAngle = false;
+  showBigDro = false;
   setConeRatio(1);
   auxForward = true;
+  xRetracted = false;
 }
 
 long normalizePitch(long pitch) {
@@ -1926,7 +2582,7 @@ long normalizePitch(long pitch) {
 void buttonPlusMinusPress(bool plus) {
   // Mutex is aquired in setDupr() and setStarts().
   bool minus = !plus;
-  if (mode == MODE_THREAD && setupIndex == 2) {
+  if (isThreadMode() && setupIndex == 2) {
     if (minus && starts > 2) {
       setStarts(starts - 1);
     } else if (plus && starts < STARTS_MAX) {
@@ -1970,17 +2626,45 @@ void beep() {
   tone(BUZZ, 1000, 500);
 }
 
+// One-key retract & return: first press moves X away from the workpiece by retractDu remembering
+// the current position, second press moves it back. Direction is away from the cut given auxForward.
+void xRetractToggle() {
+  if (isOn || x.movingManually || x.disabled) {
+    splashError(x.disabled ? "X is disabled" : "Turn off first");
+    return;
+  }
+  if (!xRetracted) {
+    long target = x.pos + (auxForward ? -1 : 1) * long(retractDu * x.motorSteps / x.screwPitch);
+    if (target > x.leftStop) target = x.leftStop;
+    else if (target < x.rightStop) target = x.rightStop;
+    if (target == x.pos) {
+      splashError("Limited by stop");
+      return;
+    }
+    xRetractReturnPos = x.pos;
+    xRetracted = true;
+    x.speedMax = x.speedManualMove;
+    stepToFinal(&x, target);
+  } else {
+    xRetracted = false;
+    x.speedMax = x.speedManualMove;
+    stepToFinal(&x, xRetractReturnPos);
+  }
+}
+
 void buttonOnOffPress(bool on) {
   resetMillis = millis();
+  // Automated moves invalidate the stored retract return position.
+  if (on) xRetracted = false;
   bool missingZStops = needZStops() && (z.leftStop == LONG_MAX || z.rightStop == LONG_MIN);
   if (on && isPassMode() && (missingZStops || x.leftStop == LONG_MAX || x.rightStop == LONG_MIN)) {
-    beep();
+    splashError(needZStops() ? "Set all stops first" : "Set X stops first");
   } else if (!isOn && on && mode == MODE_GCODE && gcodeProgramIndex >= gcodeProgramCount && setupIndex == 1) {
     beep();
   } else if (!isOn && on && setupIndex < getLastSetupIndex()) {
     // Move to the next setup step.
     setupIndex++;
-  } else if (isOn && on && (mode == MODE_TURN || mode == MODE_FACE || mode == MODE_THREAD)) {
+  } else if (isOn && on && (mode == MODE_TURN || mode == MODE_FACE || isThreadMode())) {
     // Move to the next pass.
     opIndexAdvanceFlag = true;
   } else if (!on && (z.movingManually || x.movingManually || x.movingManually)) {
@@ -2054,7 +2738,7 @@ void leaveStop(Axis* a, long oldStop) {
   if (mode == MODE_CONE) {
     // To avoid rushing to a far away position if standing on limit.
     markOrigin();
-  } else if (mode == MODE_NORMAL && a == getPitchAxis() && a->pos == oldStop) {
+  } else if (isGearboxMode() && a == getPitchAxis() && a->pos == oldStop) {
     // Spindle is most likely out of sync with the stepper because
     // it was spinning while the lead screw was on the stop.
     spindlePosSync = spindleModulo(spindlePos - spindleFromPos(a, a->pos));
@@ -2092,13 +2776,16 @@ void buttonRightStopPress(Axis* a) {
 }
 
 void buttonDisplayPress() {
-  if (!showAngle && !showTacho) {
+  if (!showAngle && !showTacho && !showBigDro) {
     showAngle = true;
   } else if (showAngle) {
     showAngle = false;
     showTacho = true;
-  } else {
+  } else if (showTacho) {
     showTacho = false;
+    showBigDro = true;
+  } else {
+    showBigDro = false;
   }
 }
 
@@ -2142,6 +2829,8 @@ void buttonModePress() {
     setModeFromTask(MODE_GCODE);
   } else if (mode == MODE_GCODE) {
     setModeFromTask(MODE_ASYNC);
+  } else if (mode == MODE_ASYNC) {
+    setModeFromTask(MODE_SLOT);
   } else {
     setModeFromTask(MODE_NORMAL);
   }
@@ -2162,8 +2851,13 @@ void buttonReversePress() {
 }
 
 void numpadPress(int digit) {
+  // Typing a digit means a number is being entered. The settings and calibration screens call
+  // this directly instead of going through processNumpad(), which is the only place that used
+  // to set the flag - so without setting it here the branch below reset the index on every
+  // keystroke and only the most recent digit survived.
   if (!inNumpad) {
     numpadIndex = 0;
+    inNumpad = true;
   }
   numpadDigits[numpadIndex] = digit;
   if (numpadIndex < 7) {
@@ -2181,6 +2875,9 @@ void numpadBackspace() {
 
 void resetNumpad() {
   numpadIndex = 0;
+  // No entry is in progress any more, so the next digit starts a fresh number rather than
+  // appending to the one just consumed.
+  inNumpad = false;
 }
 
 long getNumpadResult() {
@@ -2276,6 +2973,10 @@ bool processNumpadResult(int keyCode) {
     } else if (mode == MODE_CONE && setupIndex == 1) {
       setConeRatio(newConeRatio);
       setupIndex++;
+    } else if (mode == MODE_TPR && setupIndex == 3) {
+      // Taper for the thread being cut, e.g. 0.0625 for NPT's 1:16.
+      setConeRatio(newConeRatio);
+      setupIndex++;
     } else {
       if (abs(newDu) <= DUPR_MAX) {
         setDupr(newDu);
@@ -2291,6 +2992,10 @@ bool processNumpadResult(int keyCode) {
   if (mode == MODE_A1 && (keyCode == B_MODE_GEARS || keyCode == B_MODE_TURN || keyCode == B_MODE_FACE || keyCode == B_MODE_CONE || keyCode == B_MODE_THREAD)) {
     a = &a1;
     sign = (keyCode == B_MODE_GEARS || keyCode == B_MODE_FACE) ? -1 : 1;
+  }
+  // In diameter mode, typed X distances and coordinates are diameters, so the physical travel is half of that.
+  if (xDiameterDisplay && (keyCode == B_UP || keyCode == B_DOWN || keyCode == B_STOPU || keyCode == B_STOPD || keyCode == B_X)) {
+    newDu /= 2;
   }
   long pos = a->pos + (a->rotational ? numpadResult * 10 : newDu) / a->screwPitch * a->motorSteps * sign;
 
@@ -2322,12 +3027,12 @@ bool processNumpadResult(int keyCode) {
   if (!isOn && (keyCode == B_LEFT || keyCode == B_RIGHT || keyCode == B_UP || keyCode == B_DOWN || (mode == MODE_A1 && (keyCode == B_MODE_GEARS || keyCode == B_MODE_TURN)))) {
     if (pos < a->rightStop) {
       pos = a->rightStop;
-      beep();
+      splashError("Limited by stop");
     } else if (pos > a->leftStop) {
       pos = a->leftStop;
-      beep();
+      splashError("Limited by stop");
     } else if (abs(pos - a->pos) > a->estopSteps) {
-      beep();
+      splashError("Too far, ignored");
       return true;
     }
     a->speedMax = a->speedManualMove;
@@ -2335,9 +3040,31 @@ bool processNumpadResult(int keyCode) {
     return true;
   }
 
-  // Set axis 0 newDu ahead.
-  if (keyCode == B_Z || keyCode == B_X || (mode == MODE_A1 && keyCode == B_MODE_THREAD)) {
+  // Set A1 axis 0 newDu ahead.
+  if (mode == MODE_A1 && keyCode == B_MODE_THREAD) {
     a->originPos = -pos;
+    return true;
+  }
+
+  // Move the axis to the typed coordinate as it would be shown on the display, observing the stops.
+  if (keyCode == B_Z || keyCode == B_X) {
+    if (isOn) {
+      beep();
+      return true;
+    }
+    long target = newDu / a->screwPitch * a->motorSteps - a->originPos;
+    if (target < a->rightStop) {
+      target = a->rightStop;
+      splashError("Limited by stop");
+    } else if (target > a->leftStop) {
+      target = a->leftStop;
+      splashError("Limited by stop");
+    } else if (abs(target - a->pos) > a->estopSteps) {
+      splashError("Too far, ignored");
+      return true;
+    }
+    a->speedMax = a->speedManualMove;
+    stepToFinal(a, target);
     return true;
   }
 
@@ -2366,12 +3093,27 @@ void processKeypadEvent() {
     serialKeycode = 0;
   } else if (keypad.available() > 0) {
     event = keypad.getEvent();
+  } else if (joystickUse) {
+    event = getJoystickEvent();
   }
   if (event == 0) return;
   int keyCode = event;
   bitWrite(keyCode, 7, 0);
   bool isPress = bitRead(event, 7) == 1; // 1 - press, 0 - release
   keypadTimeUs = micros();
+
+  // Calibration screen swallows all keys, and unlike the settings screens it needs releases
+  // too: the travel routines jog with the arrow keys and the input tester exits on a hold.
+  if (inCal) {
+    processCalKeypress(keyCode, isPress);
+    return;
+  }
+
+  // Settings menu or thread database screen swallows all keys while shown.
+  if (inSettings || inThreadPicker) {
+    if (isPress) processSettingsKeypress(keyCode);
+    return;
+  }
 
   // Off button always gets handled.
   if (keyCode == B_OFF) {
@@ -2413,6 +3155,20 @@ void processKeypadEvent() {
     buttonGearsPressed = isPress;
   } else if (keyCode == B_MODE_TURN) {
     buttonTurnPressed = isPress;
+  } else if (keyCode == B_A) {
+    // Short press retracts / returns X, long press toggles the X stepper e.g. for hand-cranking.
+    if (isPress) {
+      buttonAPressed = true;
+      buttonAPressMs = millis();
+    } else if (buttonAPressed) {
+      buttonAPressed = false;
+      if (millis() - buttonAPressMs >= 500) {
+        x.disabled = !x.disabled;
+        updateEnable(&x);
+      } else {
+        xRetractToggle();
+      }
+    }
   }
 
   // For all other keys we have no "release" logic.
@@ -2443,22 +3199,25 @@ void processKeypadEvent() {
     markAxis0(&x);
   } else if (keyCode == B_Z) {
     markAxis0(&z);
-  } else if (keyCode == B_A) {
-    x.disabled = !x.disabled;
-    updateEnable(&x);
   } else if (keyCode == B_B) {
     z.disabled = !z.disabled;
     updateEnable(&z);
   } else if (keyCode == B_STEP) {
     buttonMoveStepPress();
   } else if (keyCode == B_SETTINGS) {
-    // TODO.
+    if (isOn) {
+      beep();
+    } else {
+      // In thread mode the settings button opens the thread database instead.
+      enterSettingsScreen(isThreadMode());
+    }
   } else if (keyCode == B_REVERSE) {
     buttonReversePress();
   } else if (keyCode == B_MEASURE) {
     buttonMeasurePress();
   } else if (keyCode == B_MODE_GEARS && mode != MODE_A1) {
-    setModeFromTask(MODE_NORMAL);
+    // Pressing gear again swaps which axis the spindle drives.
+    setModeFromTask(mode == MODE_NORMAL ? MODE_XGEAR : MODE_NORMAL);
   } else if (keyCode == B_MODE_TURN && mode != MODE_A1) {
     setModeFromTask(MODE_TURN);
   } else if (keyCode == B_MODE_FACE) {
@@ -2473,7 +3232,9 @@ void processKeypadEvent() {
       setModeFromTask(MODE_CUT);
     }
   } else if (keyCode == B_MODE_THREAD) {
-    mode == MODE_A1 || (mode == MODE_GCODE && ACTIVE_A1) ? markAxis0(&a1) : setModeFromTask(MODE_THREAD);
+    // Pressing thread again switches between a straight and a tapered thread.
+    mode == MODE_A1 || (mode == MODE_GCODE && ACTIVE_A1) ? markAxis0(&a1)
+        : setModeFromTask(mode == MODE_THREAD ? MODE_TPR : MODE_THREAD);
   }
 }
 
@@ -2596,23 +3357,28 @@ void moveAxis(Axis* a) {
   }
 }
 
-void modeGearbox() {
-  if (z.movingManually) {
+// One pitch of axis travel per spindle revolution. MODE_NORMAL passes Z, MODE_XGEAR passes X.
+void modeGearbox(Axis* a) {
+  if (a->movingManually) {
     return;
   }
-  z.speedMax = LONG_MAX;
-  stepToContinuous(&z, posFromSpindle(&z, spindlePosAvg, true));
+  a->speedMax = LONG_MAX;
+  stepToContinuous(a, posFromSpindle(a, spindlePosAvg, true));
+}
+
+// Feed rate for modes that move an axis at a distance per second rather than per spindle turn.
+long duPerSecondToStepsPerSecond(Axis* a, long duPerSecond) {
+  long speed = round(abs(duPerSecond) * a->motorSteps / a->screwPitch);
+  return speed < 1 ? 1 : speed;
 }
 
 long spindleModulo(long value) {
-  value = value % ENCODER_STEPS_INT;
-  if (value < 0) {
-    value += ENCODER_STEPS_INT;
-  }
-  return value;
+  return calSpindleModulo(value, ENCODER_STEPS_INT);
 }
 
 long auxSafeDistance, startOffset;
+long peckNextPos = 0; // Cut-off mode: x.pos at which the next chip-breaking peck retract happens
+long peckReturnPos = 0; // Cut-off mode: depth to return to after the peck retract
 void modeTurn(Axis* main, Axis* aux) {
   if (main->movingManually || aux->movingManually || turnPasses <= 0 ||
       main->leftStop == LONG_MAX || main->rightStop == LONG_MIN ||
@@ -2631,7 +3397,7 @@ void modeTurn(Axis* main, Axis* aux) {
 
   // opIndex 0 is only executed once, do setup calculations here.
   if (opIndex == 0) {
-    auxSafeDistance = (auxForward ? -1 : 1) * SAFE_DISTANCE_DU * aux->motorSteps / aux->screwPitch;
+    auxSafeDistance = (auxForward ? -1 : 1) * safeDistanceDu * aux->motorSteps / aux->screwPitch;
     startOffset = passStartOffset(starts, ENCODER_STEPS_FLOAT);
 
     // Move to right-bottom limit.
@@ -2647,11 +3413,12 @@ void modeTurn(Axis* main, Axis* aux) {
       opIndex = 1;
       opSubIndex = 0;
     }
-  } else if (opIndex <= turnPasses * starts) {
+  } else if (opIndex <= passTotalSteps(turnPasses, springPasses, starts)) {
     if (opIndexAdvanceFlag && (opIndex + starts) < turnPasses * starts) {
       opIndexAdvanceFlag = false;
       opIndex += starts;
     }
+    // Passes beyond turnPasses are spring passes repeating the last pass at full depth.
     long passNumber = passNumberForIndex(opIndex, starts, turnPasses);
     long auxPos = passDepthPos(auxStartStop, auxEndStop, turnPasses, passNumber);
     // Bringing X to starting position.
@@ -2659,7 +3426,12 @@ void modeTurn(Axis* main, Axis* aux) {
       stepToFinal(aux, auxPos);
       if (aux->pos == auxPos) {
         opSubIndex = 1;
-        spindlePosSync = spindleModulo(spindlePosGlobal - spindleFromPos(main, main->posGlobal) + startOffset * (opIndex - 1));
+        long flankShift = 0;
+        if (isThreadMode() && flankInfeed && turnPasses > 1) {
+          flankShift = passFlankShift(abs(stepsToDu(aux, auxEndStop - auxStartStop)),
+              turnPasses, passNumber, ENCODER_STEPS_FLOAT, dupr);
+        }
+        spindlePosSync = spindleModulo(spindlePosGlobal - spindleFromPos(main, main->posGlobal) + startOffset * (opIndex - 1) + flankShift);
         return; // Instead of jumping to the next step, let spindlePosSync get to 0 first.
       }
     }
@@ -2674,9 +3446,22 @@ void modeTurn(Axis* main, Axis* aux) {
     // Doing the pass cut.
     if (opSubIndex == 2) {
       // In case we were pushed to the next opIndex before finishing the current one.
-      stepToFinal(aux, auxPos);
-      stepToContinuous(main, posFromSpindle(main, spindlePosAvg, true));
-      if (main->pos == mainEndStop) {
+      long mainTargetPos = posFromSpindle(main, spindlePosAvg, true);
+      long auxTargetPos = auxPos;
+      // Tapered threading: drift aux across as main advances, so the thread gets progressively
+      // shallower along its length. Same ratio arithmetic modeCone() uses.
+      if (mode == MODE_TPR && coneRatio != 0) {
+        float coneEffectRatio = -coneRatio / 2 / main->motorSteps * aux->motorSteps /
+            aux->screwPitch * main->screwPitch * (auxForward ? 1 : -1);
+        auxTargetPos = auxPos + round(mainTargetPos * coneEffectRatio);
+        if (auxTargetPos > aux->leftStop) auxTargetPos = aux->leftStop;
+        if (auxTargetPos < aux->rightStop) auxTargetPos = aux->rightStop;
+      }
+      stepToFinal(aux, auxTargetPos);
+      stepToContinuous(main, mainTargetPos);
+      if (main->pos == mainEndStop ||
+          (mode == MODE_TPR && coneRatio != 0 &&
+           aux->pos == (opDuprSign > 0 ? auxStartStop : auxEndStop))) {
         opSubIndex = 3;
       }
     }
@@ -2764,6 +3549,74 @@ void modeCone() {
   stepToContinuous(&x, round(z.pos * zToXRatio));
 }
 
+// Slotting: the lathe used as a shaper. The spindle is not involved at all - X feeds in to depth,
+// Z strokes to the left, X retracts and Z returns, one stroke per pass, going deeper each time.
+// Cutting an internal keyway is the usual reason to want it.
+//
+// Pitch means feed distance per second here rather than per spindle turn, so it can be adjusted
+// while running and a pitch of 0 parks the stroke until it is raised again.
+void modeSlot() {
+  if (z.movingManually || x.movingManually || turnPasses <= 0 ||
+      z.leftStop == LONG_MAX || z.rightStop == LONG_MIN ||
+      x.leftStop == LONG_MAX || x.rightStop == LONG_MIN) {
+    setIsOnFromLoop(false);
+    return;
+  }
+
+  long zStartStop = z.rightStop;
+  long zEndStop = z.leftStop;
+  long xStartStop = auxForward ? x.rightStop : x.leftStop;
+  long xEndStop = auxForward ? x.leftStop : x.rightStop;
+
+  if (opIndex == 0) {
+    z.speedMax = z.speedManualMove;
+    x.speedMax = x.speedManualMove;
+    stepToFinal(&z, zStartStop);
+    stepToFinal(&x, xStartStop);
+    if (z.pos == zStartStop && x.pos == xStartStop) {
+      opIndex = 1;
+      opSubIndex = 0;
+    }
+  } else if (opIndex <= turnPasses) {
+    long xPos = slotDepthPos(xStartStop, xEndStop, turnPasses, opIndex);
+    long zEndPos = slotStrokeEnd(zStartStop, zEndStop, axisDuToSteps(&z, slotLeftReductionDu), opIndex);
+
+    if (opSubIndex == 0) {
+      x.speedMax = x.speedManualMove;
+      stepToFinal(&x, xPos);
+      if (x.pos == xPos) {
+        opSubIndex = 1;
+      }
+    } else if (opSubIndex == 1) {
+      if (dupr == 0) {
+        stepToFinal(&z, z.pos);
+        return;
+      }
+      z.speedMax = duPerSecondToStepsPerSecond(&z, dupr);
+      stepToContinuous(&z, zEndPos);
+      if (z.pos == zEndPos) {
+        opSubIndex = 2;
+      }
+    } else if (opSubIndex == 2) {
+      x.speedMax = x.speedManualMove;
+      stepToFinal(&x, xStartStop);
+      if (x.pos == xStartStop) {
+        opSubIndex = 3;
+      }
+    } else if (opSubIndex == 3) {
+      z.speedMax = z.speedManualMove;
+      stepToFinal(&z, zStartStop);
+      if (z.pos == zStartStop) {
+        opSubIndex = 0;
+        opIndex++;
+      }
+    }
+  } else {
+    setIsOnFromLoop(false);
+    beep();
+  }
+}
+
 void modeCut() {
   if (x.movingManually || turnPasses <= 0 || x.leftStop == LONG_MAX || x.rightStop == LONG_MIN || dupr == 0 || dupr * opDuprSign < 0) {
     setIsOnFromLoop(false);
@@ -2783,21 +3636,27 @@ void modeCut() {
       opSubIndex = 0;
     }
   } else if (opIndex <= turnPasses) {
+    long peckSteps = peckDepthDu * x.motorSteps / x.screwPitch;
     // Set spindlePos and x.pos in sync.
     if (opSubIndex == 0) {
       spindlePosAvg = spindlePos = spindleFromPos(&x, x.pos);
+      peckNextPos = peckNextDepth(x.pos, peckSteps, dupr > 0);
       opSubIndex = 1;
     }
     // Doing the pass cut.
     if (opSubIndex == 1) {
       x.speedMax = LONG_MAX;
-      long endPos = endStop - (endStop - startStop) / turnPasses * (turnPasses - opIndex);
+      long endPos = passDepthPos(startStop, endStop, turnPasses, opIndex);
       long xPos = posFromSpindle(&x, spindlePosAvg, true);
       if (dupr > 0 && xPos > endPos) xPos = endPos;
       else if (dupr < 0 && xPos < endPos) xPos = endPos;
       stepToContinuous(&x, xPos);
       if (x.pos == endPos) {
         opSubIndex = 2;
+      } else if (peckSteps > 0 && (dupr > 0 ? x.pos >= peckNextPos : x.pos <= peckNextPos)) {
+        // Peck: back off to break the chip, then resume from the same depth.
+        peckReturnPos = x.pos;
+        opSubIndex = 3;
       }
     }
     // Returning to start.
@@ -2807,6 +3666,25 @@ void modeCut() {
       if (x.pos == startStop) {
         opSubIndex = 0;
         opIndex++;
+      }
+    }
+    // Peck retract to break the chip.
+    if (opSubIndex == 3) {
+      x.speedMax = x.speedManualMove;
+      long target = peckRetractPos(peckReturnPos, long(safeDistanceDu * x.motorSteps / x.screwPitch), startStop, dupr > 0);
+      stepToFinal(&x, target);
+      if (x.pos == target) {
+        opSubIndex = 4;
+      }
+    }
+    // Returning to the depth the peck started from and resuming the cut.
+    if (opSubIndex == 4) {
+      x.speedMax = x.speedManualMove;
+      stepToFinal(&x, peckReturnPos);
+      if (x.pos == peckReturnPos) {
+        spindlePosAvg = spindlePos = spindleFromPos(&x, x.pos);
+        peckNextPos = peckNextDepth(x.pos, peckSteps, dupr > 0);
+        opSubIndex = 1;
       }
     }
   } else {
@@ -3100,26 +3978,76 @@ void processSpindleCounter() {
   int16_t count;
   pcnt_get_counter_value(PCNT_UNIT_0, &count);
   int delta = count - spindleCount;
+  spindleCount = count;
   if (delta == 0) {
     return;
   }
-  if (count >= PCNT_CLEAR || count <= -PCNT_CLEAR) {
-    pcnt_counter_clear(PCNT_UNIT_0);
-    spindleCount = 0;
-  } else {
-    spindleCount = count;
+  // The counter resets itself to zero on reaching +/-PCNT_LIM, which reads as a jump of nearly
+  // a full span in the wrong direction. Taking that at face value injected a huge false
+  // reversal, which is what made the RPM readout drop to zero at speed: several RPM
+  // measurements would complete in the same microsecond and the interval between them was 0.
+  //
+  // Undo it arithmetically rather than clearing the counter ourselves. A manual clear throws
+  // away whatever arrived between reading the value and clearing it, and at a quarter of a
+  // million counts a second - 1000 PPR, 4x, geared up 1:2, at 2000 spindle rpm - that is real
+  // position drift accumulating through a threading pass. This stays exact as long as less than
+  // half a counter span arrives between two polls: 15500 counts, about 58ms at that rate.
+  if (delta > PCNT_LIM / 2) {
+    delta -= PCNT_LIM;
+  } else if (delta < -PCNT_LIM / 2) {
+    delta += PCNT_LIM;
   }
+  // Software equivalent of swapping the encoder A and B wires.
+  if (encoderInvert) {
+    delta = -delta;
+  }
+  // Fold several raw counts into one step. Movement smaller than the divider never reaches the
+  // spindle position at all, so an encoder that flutters on a transition is quietened at the
+  // source rather than being masked further downstream by the dead-band.
+  if (encoderDivider > 1) {
+    encoderDivRemainder += delta;
+    delta = encoderDivRemainder / encoderDivider;
+    encoderDivRemainder -= delta * encoderDivider;
+    if (delta == 0) {
+      return;
+    }
+  }
+  // Count only *spurious* direction changes, so the calibration screen shows electrical noise
+  // rather than normal use. A reversal after a long run in one direction is you turning the
+  // spindle back, which is not a fault; a reversal after barely any movement is the counter
+  // dithering on a transition, which is. The same span the motion deadband uses is the
+  // dividing line, because movement inside it can't reach the axes anyway.
+  int encDir = delta > 0 ? 1 : -1;
+  if (encoderLastDir != 0 && encDir != encoderLastDir) {
+    if (encoderRunLength <= encoderBacklash) {
+      encoderReversals++;
+    }
+    encoderRunLength = 0;
+  }
+  encoderLastDir = encDir;
+  encoderRunLength += delta > 0 ? delta : -delta;
 
   unsigned long microsNow = micros();
-  if (showTacho || mode == MODE_GCODE) {
-    if (spindleEncTimeIndex >= RPM_BULK) {
+  // A gap this long means the spindle stopped, so the part-finished bulk measurement is stale.
+  // Carrying it over would time the next one from an old timestamp and report a spindle that
+  // has just started as nearly stationary. Same threshold getApproxRpm() calls stopped.
+  if (microsNow - spindleEncTime > 50000) {
+    spindleEncTimeIndex = 0;
+    spindleEncTimeAtIndex0 = microsNow;
+  }
+  // The large display's info strip and the encoder signal calibration screen both read RPM,
+  // so the bulk timing has to keep running for them as well as for the tacho readout.
+  if (showTacho || mode == MODE_GCODE || showBigDro || (inCal && calRoutine == CAL_ENC_SIGNAL)) {
+    if (calRpmAccumulate(&spindleEncTimeIndex, delta, RPM_BULK)) {
       spindleEncTimeDiffBulk = microsNow - spindleEncTimeAtIndex0;
       spindleEncTimeAtIndex0 = microsNow;
-      spindleEncTimeIndex = 0;
     }
-    spindleEncTimeIndex += abs(delta);
   } else {
+    // Nothing is reading RPM. Reset here too, or switching a readout on mid-rotation would
+    // time its first bulk from whenever the accumulator last ran.
     spindleEncTimeDiffBulk = 0;
+    spindleEncTimeIndex = 0;
+    spindleEncTimeAtIndex0 = microsNow;
   }
 
   spindlePos += delta;
@@ -3131,8 +4059,8 @@ void processSpindleCounter() {
   }
   if (spindlePos > spindlePosAvg) {
     spindlePosAvg = spindlePos;
-  } else if (spindlePos < spindlePosAvg - ENCODER_BACKLASH) {
-    spindlePosAvg = spindlePos + ENCODER_BACKLASH;
+  } else if (spindlePos < spindlePosAvg - encoderBacklash) {
+    spindlePosAvg = spindlePos + encoderBacklash;
   }
   spindleEncTime = microsNow;
 
@@ -3198,25 +4126,35 @@ void loop() {
   if (emergencyStop != ESTOP_NONE) {
     return;
   }
+  // Flash writes stall the instruction cache on both cores, so step timing is meaningless while
+  // firmware is being written. Nothing was moving when the upload was accepted and nothing may
+  // start now.
+  if (otaInProgress) {
+    return;
+  }
   if (xSemaphoreTake(motionMutex, 1) != pdTRUE) {
     return;
   }
   applySettings();
   processSpindleCounter();
   discountFullSpindleTurns();
-  if (!isOn || dupr == 0 || spindlePosSync != 0) {
+  if (!isOn || (dupr == 0 && mode != MODE_SLOT) || spindlePosSync != 0) {
     // None of the modes work.
   } else if (mode == MODE_NORMAL) {
-    modeGearbox();
+    modeGearbox(&z);
+  } else if (mode == MODE_XGEAR) {
+    modeGearbox(&x);
   } else if (mode == MODE_TURN) {
     modeTurn(&z, &x);
   } else if (mode == MODE_FACE) {
     modeTurn(&x, &z);
   } else if (mode == MODE_CUT) {
     modeCut();
+  } else if (mode == MODE_SLOT) {
+    modeSlot();
   } else if (mode == MODE_CONE) {
     modeCone();
-  } else if (mode == MODE_THREAD) {
+  } else if (isThreadMode()) {
     modeTurn(&z, &x);
   } else if (mode == MODE_ELLIPSE) {
     modeEllipse(&z, &x);

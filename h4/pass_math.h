@@ -40,6 +40,27 @@ inline bool passIsSpring(long opIndex, long starts, long turnPasses) {
   return (long)ceil(opIndex / (float)starts) > turnPasses;
 }
 
+// Depth target for a slotting pass, stepping X from the start stop to the end stop. Pass 1 is
+// already one increment in - the tool has to be cutting on the first stroke - and the last pass
+// lands exactly on the end stop so the slot finishes at the depth you set.
+inline long slotDepthPos(long startPos, long endPos, long passes, long passIndex) {
+  if (passes < 1) {
+    return startPos;
+  }
+  return endPos - calRoundL((double)(endPos - startPos) * (passes - passIndex) / passes);
+}
+
+// How far short of the far stop a slotting stroke ends. Each successive stroke stops earlier,
+// leaving room for chips at the closed end of a blind slot; 0 gives full-length strokes.
+//
+// farPos is above nearPos: the stroke runs from the right stop to the left stop, and left is the
+// larger coordinate here. Clamped at nearPos, because enough reduction would otherwise carry the
+// end below the start and the stroke would run backwards.
+inline long slotStrokeEnd(long nearPos, long farPos, long reductionSteps, long passIndex) {
+  long endPos = farPos - reductionSteps * (passIndex - 1);
+  return endPos < nearPos ? nearPos : endPos;
+}
+
 // Depth-axis target for a given pass, interpolating from startStop to endStop. Used by both the
 // turning/threading passes and the cut-off passes, which compute it identically.
 //
