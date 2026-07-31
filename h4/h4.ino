@@ -1,79 +1,15 @@
 // https://github.com/kachurovskiy/nanoels
 
-/* Change values in this section to suit your hardware. */
-
-// Define your hardware parameters here.
-const int ENCODER_PPR = 600; // 600 step spindle optical rotary encoder. Fractional values not supported.
-const int ENCODER_BACKLASH = 3; // Numer of impulses encoder can issue without movement of the spindle
-
-// Spindle rotary encoder pins. Swap values if the rotation direction is wrong.
-#define ENC_A 7
-#define ENC_B 15
-
-// Main lead screw (Z) parameters.
-const long SCREW_Z_DU = 20000; // 2mm lead screw in deci-microns (10^-7 of a meter)
-const long MOTOR_STEPS_Z = 800;
-const long SPEED_START_Z = 2 * MOTOR_STEPS_Z; // Initial speed of a motor, steps / second.
-const long ACCELERATION_Z = 30 * MOTOR_STEPS_Z; // Acceleration of a motor, steps / second ^ 2.
-const long SPEED_MANUAL_MOVE_Z = 6 * MOTOR_STEPS_Z; // Maximum speed of a motor during manual move, steps / second.
-const bool INVERT_Z = false; // change (true/false) if the carriage moves e.g. "left" when you press "right".
-const bool NEEDS_REST_Z = false; // Set to false for closed-loop drivers, true for open-loop.
-const long MAX_TRAVEL_MM_Z = 300; // Lathe bed doesn't allow to travel more than this in one go, 30cm / ~1 foot
-const long BACKLASH_DU_Z = 6500; // 0.65mm backlash in deci-microns (10^-7 of a meter)
-const char NAME_Z = 'Z'; // Text shown on screen before axis position value, GCode axis name
-
-// Cross-slide lead screw (X) parameters.
-const long SCREW_X_DU = 12500; // 1.25mm lead screw with 3x reduction in deci-microns (10^-7) of a meter
-const long MOTOR_STEPS_X = 2400; // 800 steps at 3x reduction
-const long SPEED_START_X = MOTOR_STEPS_X; // Initial speed of a motor, steps / second.
-const long ACCELERATION_X = 10 * MOTOR_STEPS_X; // Acceleration of a motor, steps / second ^ 2.
-const long SPEED_MANUAL_MOVE_X = 3 * MOTOR_STEPS_X; // Maximum speed of a motor during manual move, steps / second.
-const bool INVERT_X = true; // change (true/false) if the carriage moves e.g. "left" when you press "right".
-const bool NEEDS_REST_X = false; // Set to false for all kinds of drivers or X will be unlocked when not moving.
-const long MAX_TRAVEL_MM_X = 100; // Cross slide doesn't allow to travel more than this in one go, 10cm
-const long BACKLASH_DU_X = 1500; // 0.15mm backlash in deci-microns (10^-7 of a meter)
-const char NAME_X = 'X'; // Text shown on screen before axis position value, GCode axis name
-
-// Manual stepping with left/right/up/down buttons. Only used when step isn't default continuous (1mm or 0.1").
-const long STEP_TIME_MS = 500; // Time in milliseconds it should take to make 1 manual step.
-const long DELAY_BETWEEN_STEPS_MS = 80; // Time in milliseconds to wait between steps.
-
-/* Changing anything below shouldn't be needed for basic use. */
-
-// Configuration for axis connected to A1. This is uncommon. Dividing head (C) motor parameters.
-// Throughout the configuration below we assume 1mm = 1degree of rotation, so 1du = 0.0001degree.
-const bool ACTIVE_A1 = false; // Whether the axis is connected
-const bool ROTARY_A1 = true; // Whether the axis is rotary or linear
-const long MOTOR_STEPS_A1 = 300; // Number of motor steps for 1 rotation of the the worm gear screw (full step with 20:30 reduction)
-const long SCREW_A1_DU = 20000; // Degrees multiplied by 10000 that the spindle travels per 1 turn of the worm gear. 2 degrees.
-const long SPEED_START_A1 = 1600; // Initial speed of a motor, steps / second.
-const long ACCELERATION_A1 = 16000; // Acceleration of a motor, steps / second ^ 2.
-const long SPEED_MANUAL_MOVE_A1 = 3200; // Maximum speed of a motor during manual move, steps / second.
-const bool INVERT_A1 = false; // change (true/false) if the carriage moves e.g. "left" when you press "right".
-const bool NEEDS_REST_A1 = false; // Set to false for closed-loop drivers. Open-loop: true if you need holding torque, false otherwise.
-const long MAX_TRAVEL_MM_A1 = 360; // Probably doesn't make sense to ask the dividin head to travel multiple turns.
-const long BACKLASH_DU_A1 = 0; // Assuming no backlash on the worm gear
-const char NAME_A1 = 'C'; // Text shown on screen before axis position value, GCode axis name
-
-// Manual handwheels on A1 and A2. Ignore if you don't have them installed.
-const bool PULSE_1_USE = false; // Whether there's a pulse generator connected on A11-A13 to be used for movement.
-const char PULSE_1_AXIS = NAME_Z; // Set to NAME_X to make A11-A13 pulse generator control X instead.
-const bool PULSE_1_INVERT = false; // Set to true to change the direction in which encoder moves the axis
-const bool PULSE_2_USE = false; // Whether there's a pulse generator connected on A21-A23 to be used for movement.
-const char PULSE_2_AXIS = NAME_X; // Set to NAME_Z to make A21-A23 pulse generator control Z instead.
-const bool PULSE_2_INVERT = true; // Set to false to change the direction in which encoder moves the axis
-const float PULSE_PER_REVOLUTION = 100; // PPR of handwheels used on A1 and/or A2.
-const long PULSE_MIN_WIDTH_US = 1000; // Microseconds width of the pulse that is required for it to be registered. Prevents noise.
-const long PULSE_HALF_BACKLASH = 2; // Prevents spurious reverses when moving using a handwheel. Raise to 3 or 4 if they still happen.
+// Everything describing YOUR machine - pins, axes, encoder, keypad - lives in machine_config.h.
+// Nothing below this line should need changing to run on different hardware.
+#include "machine_config.h"
 
 const int ENCODER_STEPS_INT = ENCODER_PPR * 2; // Number of encoder impulses PCNT counts per revolution of the spindle
-const int ENCODER_FILTER = 2; // Encoder pulses shorter than this will be ignored. Clock cycles, 1 - 1023.
 const int PCNT_LIM = 31000; // Limit used in hardware pulse counter logic.
 const int PCNT_CLEAR = 30000; // Limit where we reset hardware pulse counter value to avoid overflow. Less than PCNT_LIM.
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
 const int32_t STARTS_MAX = 124; // No more than 124-start thread
 const long PASSES_MAX = 999; // No more turn or face passes than this
-const long SAFE_DISTANCE_DU = 5000; // Step back 0.5mm from the material when moving between cuts in automated modes
 const long SAVE_DELAY_US = 5000000; // Wait 5s after last save and last change of saveable data before saving again
 const long DIRECTION_SETUP_DELAY_US = 5; // Stepper driver needs some time to adjust to direction change
 const long STEPPED_ENABLE_DELAY_MS = 100; // Delay after stepper is enabled and before issuing steps
@@ -92,69 +28,6 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 
 // To be incremented whenever a measurable improvement is made.
 #define SOFTWARE_VERSION 12
-
-// To be changed whenever a different PCB / encoder / stepper / ... design is used.
-#define HARDWARE_VERSION 4
-
-#define Z_ENA 16
-#define Z_DIR 17
-#define Z_STEP 18
-
-#define X_ENA 8
-#define X_DIR 19
-#define X_STEP 20
-
-#define BUZZ 4
-#define SCL 5
-#define SDA 6
-
-#define A11 9
-#define A12 10
-#define A13 11
-
-#define A21 12
-#define A22 13
-#define A23 14
-
-#define B_LEFT 57
-#define B_RIGHT 37
-#define B_UP 47
-#define B_DOWN 67
-#define B_MINUS 5
-#define B_PLUS 64
-#define B_ON 17
-#define B_OFF 27
-#define B_STOPL 7
-#define B_STOPR 15
-#define B_STOPU 6
-#define B_STOPD 16
-#define B_DISPL 14
-#define B_STEP 24
-#define B_SETTINGS 34
-#define B_MEASURE 54
-#define B_REVERSE 44
-#define B_0 51
-#define B_1 41
-#define B_2 61
-#define B_3 31
-#define B_4 2
-#define B_5 21
-#define B_6 12
-#define B_7 11
-#define B_8 22
-#define B_9 1
-#define B_BACKSPACE 32
-#define B_MODE_GEARS 42
-#define B_MODE_TURN 52
-#define B_MODE_FACE 62
-#define B_MODE_CONE 3
-#define B_MODE_CUT 13
-#define B_MODE_THREAD 23
-#define B_MODE_OTHER 33
-#define B_X 53
-#define B_Z 43
-#define B_A 4
-#define B_B 63
 
 #define PREF_VERSION "v"
 #define PREF_DUPR "d"
@@ -247,7 +120,7 @@ const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode
 #include <SPI.h>
 #include <Wire.h>
 #include <LiquidCrystal.h>
-LiquidCrystal lcd(21, 48, 47, 38, 39, 40, 41, 42, 2, 1);
+LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D0, LCD_D1, LCD_D2, LCD_D3, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 #define LCD_HASH_INITIAL -3845709 // Random number that's unlikely to naturally occur as an actual hash
 long lcdHashLine0 = LCD_HASH_INITIAL;
 long lcdHashLine1 = LCD_HASH_INITIAL;
@@ -1723,7 +1596,7 @@ void setup() {
   }
   pref.end();
 
-  lcd.begin(20, 4);
+  lcd.begin(LCD_COLUMNS, LCD_ROWS);
   lcd.createChar(customCharMmCode, customCharMm);
   lcd.createChar(customCharLimLeftCode, customCharLimLeft);
   lcd.createChar(customCharLimRightCode, customCharLimRight);
