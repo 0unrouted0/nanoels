@@ -14,6 +14,9 @@ Controller is no longer available for purchase on https://kachurovskiy.com/ but 
 - Disabling/enabling of stepper motors allowing to switch to manual operations in 1 click
 - Soft limits allowing to cut e.g. close to the chuck
 - Automatic threads: just set length, depth, pitch and number of passes
+- Tapered threading for NPT / BSPT pipe fittings
+- Power cross-feed (`XGEAR`) for consistent facing finish
+- Automatic slotting for internal keyways, using the lathe as a shaper
 - Automatic multi-pass turning and facing
 - Automatic multi-start threads
 - Automatic half-spheres and ellipses
@@ -22,8 +25,11 @@ Controller is no longer available for purchase on https://kachurovskiy.com/ but 
 - RPM and angle indication
 - Internal/external and left-to-right versions of each automatic operation
 - Backlash compensation
+- Guided calibration routines that measure screw pitch, backlash, travel, max speed and encoder PPR on the machine
+- Encoder signal health and input test screens for diagnosing wiring problems
 - Rotary encoders to move axes
 - Rotary or linear 3rd axis
+- Optional WiFi access point with a browser-based settings page and over-the-air firmware updates
 
 Advanced CNC features via [lathecode online CAD](https://github.com/kachurovskiy/lathecode):
 
@@ -65,6 +71,19 @@ X axis - stepper terminal for the cross-slide:
 
 Note: depending on your particular encoder, stepper driver and signal wire, H4 might not be able to provide sufficient voltage/current on the 5V output lines above due to the presence of a fuse and current-limiting resistors on the PCB. If your encoder isn't functioning or steppers are working erratically, consider supplying 5V from an external power source to the 5V lines above.
 
+### Joystick (optional)
+
+A directional stick with switches (digital, not analog) plus 2 buttons can be connected to the `A1` and `A2` terminals and used as a movement pendant. Each direction and button is a switch that connects its pin to the terminal's `GND` when active.
+
+Operation is deadman-style for safety: deflecting the stick alone does nothing. Move the stick in a direction, then hold the move button — while it's held, the relevant axis moves in that direction, observing any limits set. Releasing the button or centering the stick stops the move. The second button cycles the movement step (1mm, 0.1mm, 0.01mm and so on) exactly like the step button on the front panel. While the move button is held, the bottom screen line shows what the pendant is doing, e.g. `Jog Z<` or `Jog ready` when the stick is centered.
+
+Default wiring (edit `JOYSTICK_DIR_PIN_KEYS`, `JOYSTICK_MOVE_PIN` and `JOYSTICK_STEP_PIN` in `h4.ino` to remap):
+
+- `A1` terminal: `A11` = left, `A12` = right, `A13` = up
+- `A2` terminal: `A21` = down, `A22` = move button, `A23` = step button
+
+To enable, set `JOYSTICK_USE = true` near the top of `h4.ino` and re-upload the sketch. Set it back to `false` to disable. The joystick can't be used together with a dividing head (`ACTIVE_A1`) or handwheel pulse generators (`PULSE_1_USE` / `PULSE_2_USE`) since they use the same terminals.
+
 ## Programming the controller
 
 - Install the [Arduino IDE](https://docs.arduino.cc/software/ide-v2)
@@ -81,15 +100,49 @@ A few things to check after upload:
 - Spindle direction: show angle on screen using ![IconDisplay](https://github.com/kachurovskiy/nanoels/assets/517919/60bb723d-4c2d-45af-9208-95c2b26a42d1). Rotate the chuck forward manually - angle should increase. If it decreases, swap `ENCB` and `ENCA` wires in the terminal
 - Motor direction: try ![IconArrowLeft](https://github.com/kachurovskiy/nanoels/assets/517919/d110519a-6cf4-491e-b81a-c09aefa49e49) ![IconArrowRight](https://github.com/kachurovskiy/nanoels/assets/517919/48a0327e-0cc4-465e-b371-644f153f3288) ![IconArrowUp](https://github.com/kachurovskiy/nanoels/assets/517919/ac350635-4424-4438-bcfb-3cb0431345f8) ![IconArrowDown](https://github.com/kachurovskiy/nanoels/assets/517919/897b4005-45d0-46ed-977e-b25a98983961) buttons - if motor is moving in the wrong direction, change `INVERT_Z` or `INVERT_X` in the code, re-upload the sketch (or swap the motor leads `A+` and `A-` in the stepper driver)
 
+After the first cable upload you can install later versions over WiFi instead — see
+[WIFI.md](WIFI.md). The partition layout already has two application slots, so no change to the
+board settings is needed. The very first upload has to be over USB.
+
 Troubleshooting:
 
 - Arduino IDE doesn't detect NanoEls H4: try a different USB cable
 - Not sure which COM port is NanoEls H4: unplug it, check the list of available ports in Arduino IDE, plug H4 in, see new port that appeared is H4
 - `ImportError: No module named serial` error on Linux: try `sudo apt install python3-serial`
 
+## Running this on different hardware
+
+Everything that describes a particular machine lives in **`machine_config.h`**. The sketch itself contains no machine-specific numbers, so porting to a different lathe, encoder, screw or panel means editing one file.
+
+It's organised into sections: board revision, pins, spindle encoder, Z axis, X axis, optional third axis, handwheels, manual stepping feel, WiFi, keypad codes, joystick.
+
+Two kinds of setting live there, and the difference matters:
+
+- **Wiring and topology** — pins, which axes exist, whether a joystick or handwheels are fitted, the keypad matrix codes. These can't change while running, so they're compile-time only.
+- **Startup defaults for values you can also edit in the settings menu** — encoder PPR and gearing, lead screw pitch, motor steps, backlash, speeds, max travel. Once a controller has been set up its stored values win, and these are only used by a device that has never been configured. Use the settings menu for these day to day; change them here to set the defaults for a new build, or after a settings wipe.
+
+A few notes for a new setup:
+
+- The **Input tester** calibration routine prints the code of whichever key you press, which is the easy way to remap `B_*` for a differently-wired panel.
+- `ENCODER_FILTER` has an RPM ceiling that depends on your encoder and gearing — the formula is in the file, and a value that's safe on one encoder can silently drop pulses on another.
+- The A1 terminals are shared between the third axis, the handwheels and the joystick. Only one of those can be enabled.
+- After changing anything, work through [CALIBRATION.md](CALIBRATION.md) — most of these values can be measured on the machine rather than guessed.
+
+## Tests
+
+The arithmetic that decides whether a part comes out the right size - screw pitch correction, backlash and travel conversions, encoder PPR derivation, spindle angle wrapping and the RPM accumulator - lives in `calibration_math.h`, which has no Arduino dependencies. The firmware includes it and calls it directly, so the tests exercise the shipped code rather than a copy of it.
+
+Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installed:
+
+```
+.\test\run_tests.ps1
+```
+
+No board required. The suite is 69 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+
 ## Usage manual
 
-**This manual corresponds to `NanoEls H4 V12`. To see your software version, hold ![IconStop](https://github.com/kachurovskiy/nanoels/assets/517919/9ed2da6c-7461-419f-827d-781980c9ddde) for 5 seconds. If you have a different version - e.g. `V5`, please update to the latest one.**
+**This manual corresponds to `NanoEls H4 V15`. To see your software version, hold ![IconStop](https://github.com/kachurovskiy/nanoels/assets/517919/9ed2da6c-7461-419f-827d-781980c9ddde) for 5 seconds. If you have a different version - e.g. `V5`, please update to the latest one.**
 
 ### Switching between metric and imperial
 
@@ -126,11 +179,163 @@ Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce
 
 Use numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/517919/67f660f1-c6fa-4922-bf03-9f6571023806) to ![Icon9](https://github.com/kachurovskiy/nanoels/assets/517919/6ad6b4e4-5bf1-473f-93ed-65f6ee478d8f) to enter a custom step value. Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce78e4-4202-4642-9433-e61ca39de9d5) when the screen bottom line shows `Use 1.234mm?` will make the step equal to `1.234mm`.
 
+### Settings menu
+
+The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
+
+Press the settings button when the controller is `off` to open the settings menu. It opens on a directory of sections; move with the arrows and press play to enter one, and press stop to come back out.
+
+| # | Section | Holds |
+|---|---|---|
+| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel |
+| 2 | Z axis | direction, backlash, screw pitch, motor steps, pulley teeth, speeds, acceleration, max travel |
+| 3 | X axis | as Z |
+| 4 | A1 axis | as Z, plus whether it's fitted and whether it's rotary |
+| 5 | Spindle encoder | PPR, direction, pulley teeth, divider, dead-band, glitch filter |
+| 6 | Handwheels | which are fitted, direction, PPR, pulse width, dead-band |
+| 7 | Joystick | fitted, debounce |
+| 8 | WiFi & updates | radio on/off, access PIN — see [WIFI.md](WIFI.md) |
+| 9 | Calibration | opens the guided measuring routines described below |
+
+Inside a section, up and down move one item at a time, left and right jump a page, the numpad enters a new value and play confirms. Values are stored on the device and survive reboots and firmware updates. Anything editable here can be changed without re-flashing.
+
+Every value shows its unit next to it, both on the screen and in the web interface — `Now 800 steps`, `Now 3400 steps/s`, `Now 20 teeth`. Distances follow whichever measurement system is selected, so the same setting reads `2 mm` or `0.0787"` depending on the mode. The confirmation line does the same while you type, so `Use 300 ms?` can't be mistaken for microseconds.
+
+Distances (backlash, screw pitch) are entered in microns when in metric mode or thousandths of an inch when in inch mode. Speed and acceleration are entered in motor steps per second and steps per second squared - same units as the constants at the top of `h4.ino`. Press the settings button or off button to exit.
+
+After changing screw pitch or motor steps, re-zero the axes since the physical meaning of the stored positions changes.
+
+### Belt-driven axes
+
+If a motor drives its lead screw through a belt or gears rather than a direct coupling, set `Motor pulley` and `Lead screw pulley` to their tooth counts in that axis's settings section. `Motor steps/rev` is then what the driver is actually set to - the steps for one turn of the **motor** - and the firmware works out the steps per turn of the screw itself.
+
+Only the ratio matters, so a 3:1 reduction can be entered as 1 and 3, or 20 and 60. Both 1 is a direct coupling, which is the default.
+
+You can still fold the ratio into the step count by hand if you prefer - 800 steps through a 3:1 reduction is the same as 2400 steps with 1 and 1 - but entering the teeth keeps the driver setting and the mechanics separate, so changing a pulley means changing one number instead of recomputing.
+
+### Belt-driven encoders
+
+If the encoder is driven off the spindle by a belt or gears rather than mounted on the spindle directly, set `Spindle pulley` and `Encoder pulley` to the tooth counts. Only the ratio matters, so a 1:2 belt can be entered as 40 and 20, or as 2 and 1. Direct drive is 1 and 1, which is the default.
+
+Everything downstream works in spindle revolutions, so once the ratio is set the pitch, threading and RPM readout are all correct regardless of the gearing. The encoder PPR calibration routine accounts for it too - you turn the spindle, and it undoes the ratio to report the encoder's own PPR.
+
+Note that a belt-driven encoder spins faster than the spindle when it's geared up, so a 1:2 belt at 2000 spindle rpm is running the encoder at 4000. Check that against the encoder's rated speed.
+
+### Encoder divider and backlash
+
+Two settings for an encoder that flutters - typically one on a belt, or one whose signal is marginal.
+
+`Encoder divider` folds several raw counts into one step: at `2`, two counts become one. Movement smaller than the divider never reaches the spindle position at all, so flutter is quietened at the source. The cost is resolution - threading sync gets coarser by the same factor - so raise it only as far as you need. `1` is off.
+
+`Encoder backlash` is a dead-band in counts. The carriage only follows a spindle reversal once the spindle has gone back this far, which stops it chasing small back-and-forth movement. The cost is that a genuine reversal is ignored for that many counts. This works downstream of the divider, so it's the coarser of the two tools - prefer the divider first.
+
+### Backing up settings over USB
+
+Connect over USB at 115200 baud and send `$` on its own line. The controller prints every stored machine setting as a line you can paste straight back to restore it:
+
+```
+; NanoEls H4 V16 settings
+; paste these lines back to restore, distances are in deci-microns
+$eppr=600
+$Zinv=0
+$Zbla=6500
+$Zscr=20000
+$Cscr=20000
+...
+; nvs free entries 476
+; nvs save batches since boot 12
+; uptime seconds 843
+```
+
+Send a single `$key=value` line to change one setting - `$Zbla=250` sets Z backlash to 25 microns. Values use the same units as storage (deci-microns for distances, `0`/`1` for on/off), and go through exactly the same validation as the settings menu, so serial can't store a value the menu would have refused. Settings can't be changed while the controller is `on`.
+
+This is machine configuration only - positions, stops and the current mode are working state and aren't included. Worth saving a copy somewhere after calibrating: there's no undo in the settings menu, and a mistyped value overwrites the old one permanently.
+
+The three `;` lines at the end are diagnostics. `nvs free entries` is how much settings storage remains, and `nvs save batches` counts how many times the controller has committed to flash since power-on - useful if you ever suspect it's writing more often than it should.
+
+Axis settings are named by the axis letter followed by the suffix: `Z`, `X` and `C` for the third axis. **Backups taken with V15 or earlier are not reliable** - a bug named axis settings by their position in the menu rather than by their axis, so those files can contain the wrong key for a setting, the same key twice, and no third-axis settings at all. Take a fresh backup after upgrading and discard the old one.
+
+### Settings over WiFi
+
+The same settings can be edited from a phone or laptop, and firmware installed without a cable. The controller brings up its own WiFi network, so no router is involved. It's off unless you turn it on from `Settings > WiFi & updates`, it takes effect immediately without a restart, and while off there's no radio and no change in behaviour at all.
+
+Edits made in the browser are staged and applied together when you press **Save**, so a half-typed number never reaches the machine.
+
+See **[WIFI.md](WIFI.md)** for setup, what the page can and can't do, and why the access PIN has to be eight digits.
+
+The web page is generated from the same settings table the LCD menu walks and writes through the same validation, so the two can't disagree about what exists or what's allowed. It deliberately has no way to move the machine: motion is only ever commanded from the keypad.
+
+### Calibration
+
+The last settings menu item, `Calibration`, opens a set of guided routines that *measure* the machine values on the actual lathe instead of asking you to know them in advance. Everything they save goes to the same places the settings menu edits, so calibrated and hand-entered values are interchangeable and you can always check or override a result in the menu afterwards.
+
+Use up and down to browse the routines, left and right to jump by 4. The second line names the routine and the third shows the value it currently holds, so you can see what you're about to change. Press play to start one, off to go back. Throughout, play confirms and moves to the next step, minus steps back one so a wrong entry can be redone without repeating the physical moves, plus runs the current step's move again without advancing, and off aborts and puts back anything the routine changed.
+
+**Nothing moves without you asking for it.** Every test move is shown on screen first and only happens when you press play, and off aborts. Moves that would cross a soft limit or exceed the axis travel are refused outright rather than shortened, since a silently truncated test move would corrupt the measurement it feeds.
+
+- **Z / X screw pitch** - the one that makes parts come out the right size. Pick a test distance with left and right (1 to 100mm; longer is more accurate) and press play: the axis first moves 1mm to take up the slack, *then* you zero the dial indicator, press play again for the test move, and type what the indicator actually read. The corrected lead screw pitch is shown next to the old one before you save it. A correction larger than ±20% is rejected as a probable typo. On X this always means the actual cross-slide travel, not a diameter, even when the X readout is in diameter mode.
+
+  That 1mm pre-load is not padding - it is what keeps backlash out of the result. Both moves go the same way, so the axis is already loaded when you zero the indicator and every step of the test move produces real travel. Without it, an axis you had last jogged *backwards* would spend the start of the test move taking up slack, the firmware would add however much backlash compensation is currently configured, and any error in that setting would land straight in the measured pitch. This is also why pitch can be calibrated **before** backlash: the routine does not depend on backlash being right yet. Just don't nudge the axis backwards between zeroing the dial and the test move.
+- **Z / X backlash** - moves 2mm to take up the slack, waits for you to zero the indicator, then nudges back one step at a time with the left arrow. Press play the instant the indicator starts moving and the distance travelled becomes the backlash. Backlash compensation is switched off while the routine runs so it can't measure itself.
+- **Z / X direction** - moves the axis 5mm and asks in plain words which way it went. Answer with play if correct, left arrow if not, and the direction inversion is flipped and re-tested.
+- **Z / X travel limit** - the only routine you drive yourself: jog to one extreme with the arrows, press play, jog to the other, press play. The span becomes the axis max travel, which is what the "too far" safety check is based on. This value used to be compile-time only.
+- **Z / X max speed** - runs 20mm strokes, raising the speed 10% each time you press play. Press the left arrow the moment the motor stalls or sounds wrong and the routine saves 80% of the last speed that worked.
+- **Encoder PPR** - mark the chuck, choose how many revolutions to turn with left and right, press play and turn the spindle by hand. The count and the derived PPR update live. Press play at exactly that many turns and the result snaps to the nearest standard value if it's within 2%.
+- **Encoder direction** - shows the count changing as you turn the spindle forwards. If it counts down instead of up, press the left arrow to reverse the encoder in software - previously this needed the A and B wires physically swapped.
+- **Encoder signal** - a read-only health screen showing angle, RPM, the glitch filter setting, and a `Flips` counter of direction reversals. **With the spindle stopped this must stay at zero.** Anything else is electrical noise on the encoder cable, and the fix is a larger `ENCODER_FILTER` at the top of the sketch, better cable routing away from the stepper and VFD wiring, or a solid single-point ground. Left arrow resets the counters.
+- **Input tester** - a read-only screen showing the code of whatever key you press and whether it's down or up, plus the live state of all six joystick pins. Useful for finding a stuck key or checking joystick wiring. Because it deliberately swallows every key, you leave it by *holding* off for a second.
+
+Work through them in this order when setting up a machine: input tester and encoder signal first (nothing moves), then encoder PPR and direction, then the axis direction checks, then screw pitch, backlash, travel limits and finally max speed. Re-zero the axes after calibrating screw pitch, since the physical meaning of the stored positions changes.
+
+**See [CALIBRATION.md](CALIBRATION.md) for a full step-by-step walkthrough of every routine**, including what to measure, what to type, what the messages mean and how to back the results up.
+
+### Thread database
+
+When in threading mode and `off`, press the settings button to open the thread database instead of the settings menu. Use up and down arrows to browse one at a time, left and right to jump by 10, or jump straight to a thread family with the numpad: `1` metric, `2` UNC/UNF, `3` BSPP, `4` trapezoidal, `5` ACME, `6` NPT. The database reopens on the last used thread. Press play to apply the selected thread - pitch and measurement system are set automatically and starts are reset to 1. Includes common metric coarse and fine, UNC, UNF, BSPP, metric trapezoidal (Tr), ACME and NPT threads. Note that trapezoidal, ACME and NPT presets only set the pitch - the correct form tool and, for NPT, a taper setup are still needed.
+
+### Surface speed readout
+
+Press the display button to cycle the extra readouts: spindle angle, then RPM with surface speed (e.g. `1250rpm 98m/min`), then the large position display, then off. Surface speed shows the current cutting speed in m/min (or ft/min in inch and TPI modes) calculated from the spindle RPM and the tool diameter position. For accurate readings, X must be zeroed on the lathe centerline - see "Zeroing the axes" below.
+
+### Large position display
+
+The third press of the display button switches to a full-screen readout showing the Z and X positions in large 2-row-tall digits readable from across the shop. It steps aside automatically whenever there's something else to show - numpad entry, operation setup, automated passes or a message - and comes back afterwards. In modes other than the normal gearbox mode it's only shown while `off`.
+
+The big digits show four figures, right-aligned so the value always ends in the same column: 0.01mm below 100mm and 0.1mm above it, or 0.001" and 0.01" in inch mode. That's one digit less than the normal screen, which keeps full micron precision - the trade buys the info strip on the right, and the digit given up is the fastest-changing one, the one that's unreadable while an axis is moving anyway.
+
+The strip beside the digits shows spindle RPM, the current jog step, and - on the rows belonging to each axis - a `Z OFF` or `X OFF` flag when that axis's stepper is disabled. **That flag is the important one.** This screen shows commanded stepper travel, not a measured carriage position: there is no scale on the axes, so the firmware only knows where it has told the motors to go. Disable an axis and hand-crank it and the number beside it silently stops being true until you re-zero. The flag sits on that axis's own rows so there's no ambiguity about which number has gone stale.
+
+A note on the digit shapes: the display has only 8 custom character slots, and they're all spent on this font. Thinner strokes would need outer-cell glyphs combining a vertical bar with a crossbar, which needs roughly 19 shapes - so the chunky verticals are a hard limit of the hardware, not a style choice.
+
+### Screen messages
+
+When an input is refused - a value out of range in the settings, a move that would pass a limit, turning on without stops set - a short message explaining why appears on the bottom line for a moment along with the beep, e.g. `Limited by stop`, `Below start speed` or `Set all stops first`. During automated operations the bottom line also shows a progress bar filling up as passes complete. On power-up the screen briefly shows the firmware version, encoder PPR and the active screw/motor configuration of both axes so a wrong setup can be spotted before making chips.
+
+### Diameter readout for X
+
+By default X shows the tool position as a radius - distance from X0. Switch the `X readout` setting to `diameter` to show it doubled, the way lathe work is usually measured. In diameter mode the `X` in front of the position is replaced with a `ø` symbol so the two readouts can't be confused. In diameter mode, X values entered on the numpad - moves, X limits and go-to coordinates - are also treated as diameters, so entering `0.5mm` on the numpad and pressing the down arrow removes 0.5mm from the diameter by moving the tool 0.25mm. Zeroing X from a measured diameter with ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176) already expects a diameter and works the same in both modes. The surface speed readout is unaffected.
+
+### Spring passes
+
+The `Spring passes` setting (0 = off) adds that many extra passes at final depth to the end of automatic turning, facing and threading operations. Spring passes repeat the last pass without adding infeed, removing the material left behind by tool and part deflection for a better finish and a more accurate size. The display shows `Spring x of y` while they run.
+
+### Peck parting
+
+The `Parting peck depth` setting (0 = off) makes the automatic cut-off mode back the tool off by 0.5mm every time it advances by the set depth, breaking the chip and letting coolant in, then return and continue the cut. Useful on deep parting cuts where a continuous chip tends to jam in the groove.
+
+### Thread flank infeed
+
+With the `Thread flank infeed` setting `on`, multi-pass threading feeds the tool in along the thread flank - the electronic equivalent of setting a manual lathe compound to 29.5 degrees - instead of plunging straight in. Each pass shifts sideways along the thread by 29.5 degrees worth of the remaining depth so the tool cuts mostly with its leading edge, which cuts cleaner and reduces chatter on deeper threads. The final pass (and any spring passes) run with no shift, finishing the thread in its true position.
+
+### Retract and return
+
+Press ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176) briefly when `off` to retract X away from the workpiece by the `Retract distance` setting (default 2mm) - to inspect the work, measure or clear chips. The bottom line shows `X retracted`. Press it briefly again to return exactly to the remembered position. The retract direction follows the internal/external operation setting and observes X limits. Holding ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176) for half a second performs its old function - enabling/disabling the X stepper for manual operation.
+
 ### Zeroing the axes
 
 Z and X position can be counted from any location you'd like. By pressing ![IconZ](https://github.com/kachurovskiy/nanoels/assets/517919/32d95cce-d8be-4f8c-8a9c-399d278a2115) or ![IconX](https://github.com/kachurovskiy/nanoels/assets/517919/fd870901-4cc0-469e-ad88-e558998928d0) you can take the current position on the respective axis as `0`.
 
-You can also set the `0` at a position ahead of the current position by entering the required distance using the numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/517919/67f660f1-c6fa-4922-bf03-9f6571023806) to ![Icon9](https://github.com/kachurovskiy/nanoels/assets/517919/6ad6b4e4-5bf1-473f-93ed-65f6ee478d8f) and then pressing ![IconZ](https://github.com/kachurovskiy/nanoels/assets/517919/32d95cce-d8be-4f8c-8a9c-399d278a2115) or ![IconX](https://github.com/kachurovskiy/nanoels/assets/517919/fd870901-4cc0-469e-ad88-e558998928d0).
+You can also move an axis to an exact coordinate: when `off`, enter the target position using the numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/517919/67f660f1-c6fa-4922-bf03-9f6571023806) to ![Icon9](https://github.com/kachurovskiy/nanoels/assets/517919/6ad6b4e4-5bf1-473f-93ed-65f6ee478d8f) and then press ![IconZ](https://github.com/kachurovskiy/nanoels/assets/517919/32d95cce-d8be-4f8c-8a9c-399d278a2115) or ![IconX](https://github.com/kachurovskiy/nanoels/assets/517919/fd870901-4cc0-469e-ad88-e558998928d0) - the axis moves to that position as it would be shown on the display. Use plus / minus while typing to enter negative coordinates. Typing `0` and pressing the axis button returns the tool to the axis zero. Limits are observed - the move clamps at a limit and beeps. Note: in older firmware versions this key combination set the axis `0` ahead of the current position, that function was replaced by go-to-position in V14.
 
 You can set X0 on the lathe centerline by making a light cut, measuring diameter, entering it on the numpad and then pressing ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176).
 
@@ -177,9 +382,69 @@ Direction of movement can be quickly reversed with ![IconReverse](https://github
 
 Soft limits are respected in this mode allowing to finish the cut in a precise position.
 
-Cross-slide can be moved with manual move buttons or disabled using ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176) and be operated manually.
+Cross-slide can be moved with manual move buttons or disabled by holding ![IconA](https://github.com/kachurovskiy/nanoels/assets/517919/3059b6ed-0197-4e48-91a7-80a7e1317176) for half a second and be operated manually. A short press of that button retracts / returns the cross-slide instead - see "Retract and return".
 
 Press ![IconStop](https://github.com/kachurovskiy/nanoels/assets/517919/9ed2da6c-7461-419f-827d-781980c9ddde) to turn gearbox mode `off` and decouple lead screw movements from spindle turns.
+
+### Modes hidden behind a button
+
+Some buttons hold more than one mode. When the screen shows a `*` after the mode name, pressing that same button again switches to another mode:
+
+| Button | First press | Press again |
+|---|---|---|
+| gears | gearbox (Z) — shown as `*` | `XGEAR` |
+| thread | `THRD*` | `TPR` (tapered thread) |
+
+The `*` only appears on the first of the pair, so if you can see it there's something else behind that key.
+
+### XGEAR — power cross-feed
+
+Press the gears button twice. Where gearbox mode feeds `Z` along the bed, `XGEAR` feeds `X` across the face — the cross-slide moves one pitch per spindle revolution.
+
+This is what you want for **facing**. Surface finish on a faced surface depends almost entirely on feed per revolution, and hand-cranking gives a visibly uneven finish because your hand speed varies. Set `0.05mm` and the finish is consistent right across the face with no arm ache.
+
+Everything works as it does in gearbox mode: soft limits are respected, reverse flips the direction, and the carriage can be moved by hand or disabled and cranked manually.
+
+The one difference: manual `Z` moves during `XGEAR` don't preserve the spindle phase the way manual `X` moves do in gearbox mode. That only matters if you're using `XGEAR` to cut a spiral, which is unusual.
+
+### Automatic slotting
+
+Press the mode button until `SLOT` is shown.
+
+This one doesn't use the spindle at all — it uses the lathe as a **shaper**. `X` feeds in to depth, `Z` strokes to the left, `X` retracts, `Z` returns to the right, and the next pass goes deeper. Lock the spindle before starting.
+
+**What it's for:** cutting an **internal keyway** in a bore — a pulley, gear or sprocket. Otherwise you need a broach set (expensive, one size per keyway, wants a press) or a mill with a slotting head. Doing it by hand means cranking the carriage back and forth for fifty passes. Also works for external keyways, flats and splines.
+
+All four soft limits must be set: `Z` left and right give the length of the slot, `X` up and down give the start and finish depth.
+
+Pressing play guides through the same steps as the other automatic modes — number of passes, then `External?`/`Internal?` to choose which `X` limit to start from, then `Go?`.
+
+Two things behave differently from the spindle-driven modes:
+
+- **Pitch is the feed rate in distance per second**, not per revolution, since there is no spindle to reference. Adjust it while running with plus and minus. Setting pitch to `0` parks the stroke until you raise it again, which is a convenient pause.
+- `X` moves and the return stroke use the configured manual move speed, not the pitch.
+
+For **blind** slots, set `Slot left reduction` in `Settings > Preferences` to something small. Each successive stroke then stops a little shorter than the last, leaving somewhere for chips to accumulate near the closed end instead of packing solid. `0` — the default — gives full-length strokes for a through slot.
+
+### Tapered threading
+
+Press the thread button twice; the mode reads `TPR`.
+
+Identical to normal threading except that `X` drifts steadily across as `Z` advances, so the thread gets progressively shallower along its length.
+
+**What it's for: NPT and BSPT pipe threads**, which are tapered by definition and turn up in every hydraulic, pneumatic, gas and plumbing fitting. Making your own adapter beats waiting a week for one.
+
+Setup adds one step between `External?`/`Internal?` and `Go?`:
+
+```
+Taper ratio 0.0625?
+```
+
+The ratio is `(major diameter - minor diameter) / length`, the same figure cone mode uses. NPT is 1:16, so `0.0625`. Type a new one on the numpad and press play, or press play to keep what's shown.
+
+Everything else — multi-start, spring passes, flank infeed, skipping a pass with play — works exactly as it does for a straight thread.
+
+Note that the taper ratio is the **same stored value cone mode uses**, so setting one changes the other.
 
 ### Automatic turning
 
