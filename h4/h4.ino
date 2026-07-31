@@ -3086,6 +3086,1568 @@ bool processNumpadResult(int keyCode) {
   return false;
 }
 
+void applyEncoderPpr() {
+  // Counts per revolution of the SPINDLE, which is what everything downstream means by a
+  // revolution. A belt-driven encoder turns spindleTeeth/pulleyTeeth times per spindle turn,
+  // and the divider folds that many raw counts into one step.
+  ENCODER_STEPS_INT = calCountsPerSpindleRev(encoderPpr, encoderSpindleTeeth, encoderPulleyTeeth, encoderDivider);
+  ENCODER_STEPS_FLOAT = ENCODER_STEPS_INT;
+  RPM_BULK = ENCODER_STEPS_INT;
+}
+
+// Overrides compiled-in axis defaults with values changed via the settings menu, if any.
+void loadAxisSettings(Axis* a, Preferences* pref) {
+  String n = String(a->name);
+  a->invertStepper = pref->getBool((n + "inv").c_str(), a->invertStepper);
+  a->backlashDu = pref->getLong((n + "bla").c_str(), a->backlashDu);
+  a->screwPitch = pref->getLong((n + "scr").c_str(), (long) round(a->screwPitch));
+  a->motorStepsPerTurn = pref->getLong((n + "mst").c_str(), (long) round(a->motorStepsPerTurn));
+  a->motorTeeth = pref->getLong((n + "mtt").c_str(), a->motorTeeth);
+  a->screwTeeth = pref->getLong((n + "stt").c_str(), a->screwTeeth);
+  a->speedManualMove = pref->getLong((n + "spd").c_str(), a->speedManualMove);
+  a->acceleration = pref->getLong((n + "acc").c_str(), a->acceleration);
+  a->maxTravelMm = pref->getLong((n + "mtr").c_str(), a->maxTravelMm);
+  a->speedStart = pref->getLong((n + "sst").c_str(), a->speedStart);
+  a->needsRest = pref->getBool((n + "rst").c_str(), a->needsRest);
+  a->active = pref->getBool((n + "act").c_str(), a->active);
+  a->rotational = pref->getBool((n + "rot").c_str(), a->rotational);
+  recomputeAxisDerived(a);
+}
+
+void settingsPutLong(Axis* a, const char* suffix, long value) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putLong((String(a->name) + suffix).c_str(), value);
+  pref.end();
+}
+
+void settingsPutBool(Axis* a, const char* suffix, bool value) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putBool((String(a->name) + suffix).c_str(), value);
+  pref.end();
+}
+
+// Axis that the current settings menu item refers to, NULL for the global items.
+Axis* settingsAxis() {
+  return settingsAxisOf(settingsIndex);
+}
+
+bool settingsUsesDu() {
+  return settingUsesDu(settingsIndex);
+}
+
+bool settingsIsToggle() {
+  return settingIsToggle(settingsIndex);
+}
+
+void settingsPutGlobalLong(const char* key, long value) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putLong(key, value);
+  pref.end();
+}
+
+void settingsPutGlobalInt(const char* key, int value) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putInt(key, value);
+  pref.end();
+}
+
+void settingsPutGlobalBool(const char* key, bool value) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putBool(key, value);
+  pref.end();
+}
+
+int keyCodeToDigit(int keyCode) {
+  if (keyCode == B_0) return 0;
+  if (keyCode == B_1) return 1;
+  if (keyCode == B_2) return 2;
+  if (keyCode == B_3) return 3;
+  if (keyCode == B_4) return 4;
+  if (keyCode == B_5) return 5;
+  if (keyCode == B_6) return 6;
+  if (keyCode == B_7) return 7;
+  if (keyCode == B_8) return 8;
+  if (keyCode == B_9) return 9;
+  return -1;
+}
+
+void enterSettingsScreen(bool threadPicker) {
+  inSettings = !threadPicker;
+  inThreadPicker = threadPicker;
+  settingsSection = -1; // Always open on the directory
+  resetNumpad();
+  inNumpad = false;
+  settingsLcdHash = LCD_HASH_INITIAL;
+  // Ensure no manual move continues while the settings screen swallows key releases.
+  buttonLeftPressed = false;
+  buttonRightPressed = false;
+  buttonUpPressed = false;
+  buttonDownPressed = false;
+  buttonGearsPressed = false;
+  buttonTurnPressed = false;
+  buttonAPressed = false;
+}
+
+void exitSettingsScreens() {
+  inSettings = false;
+  inThreadPicker = false;
+  resetNumpad();
+  inNumpad = false;
+  lcdHashLine0 = LCD_HASH_INITIAL; // Force full redraw of the normal screen.
+  // When exiting with the off button, its release event goes through normal processing.
+  // Without this, buttonOffRelease() would see a stale resetMillis and trigger a reset().
+  resetMillis = millis();
+}
+
+// Axis a table entry acts on, NULL for the global items.
+Axis* settingsAxisOf(int index) {
+  switch (SETTINGS[index].axis) {
+    case SAX_Z: return &z;
+    case SAX_X: return &x;
+    case SAX_A1: return &a1;
+    default: return NULL;
+  }
+}
+
+// Current stored value of a settings menu item, in the units it is persisted in: deci-microns
+// for distances, 0 or 1 for toggles.
+//
+// Dispatched on the table's own storage key rather than on the menu index, so there is one
+// branch per distinct parameter instead of one per menu row. Three axes share the same handful
+// of branches, and re-ordering the menu cannot silently point a row at the wrong variable.
+long settingsReadValue(int index) {
+  const char* k = SETTINGS[index].prefKey;
+  Axis* a = settingsAxisOf(index);
+  if (a != NULL) {
+    if (!strcmp(k, "inv")) return a->invertStepper ? 1 : 0;
+    if (!strcmp(k, "bla")) return a->backlashDu;
+    if (!strcmp(k, "scr")) return (long) round(a->screwPitch);
+    if (!strcmp(k, "mst")) return (long) round(a->motorStepsPerTurn);
+    if (!strcmp(k, "mtt")) return a->motorTeeth;
+    if (!strcmp(k, "stt")) return a->screwTeeth;
+    if (!strcmp(k, "sst")) return a->speedStart;
+    if (!strcmp(k, "spd")) return a->speedManualMove;
+    if (!strcmp(k, "acc")) return a->acceleration;
+    if (!strcmp(k, "mtr")) return a->maxTravelMm;
+    if (!strcmp(k, "rst")) return a->needsRest ? 1 : 0;
+    if (!strcmp(k, "act")) return a->active ? 1 : 0;
+    if (!strcmp(k, "rot")) return a->rotational ? 1 : 0;
+    return 0;
+  }
+  if (!strcmp(k, "eppr")) return encoderPpr;
+  if (!strcmp(k, "einv")) return encoderInvert ? 1 : 0;
+  if (!strcmp(k, "est")) return encoderSpindleTeeth;
+  if (!strcmp(k, "ept")) return encoderPulleyTeeth;
+  if (!strcmp(k, "ediv")) return encoderDivider;
+  if (!strcmp(k, "ebl")) return encoderBacklash;
+  if (!strcmp(k, "eflt")) return encoderFilter;
+  if (!strcmp(k, "spp")) return springPasses;
+  if (!strcmp(k, "pck")) return peckDepthDu;
+  if (!strcmp(k, "fli")) return flankInfeed ? 1 : 0;
+  if (!strcmp(k, "rtd")) return retractDu;
+  if (!strcmp(k, "slt")) return slotLeftReductionDu;
+  if (!strcmp(k, "safe")) return safeDistanceDu;
+  if (!strcmp(k, "p1u")) return pulse1Use ? 1 : 0;
+  if (!strcmp(k, "p1i")) return pulse1Invert ? 1 : 0;
+  if (!strcmp(k, "p2u")) return pulse2Use ? 1 : 0;
+  if (!strcmp(k, "p2i")) return pulse2Invert ? 1 : 0;
+  if (!strcmp(k, "hppr")) return (long) round(pulsePerRevolution);
+  if (!strcmp(k, "pmw")) return pulseMinWidthUs;
+  if (!strcmp(k, "phb")) return pulseHalfBacklash;
+  if (!strcmp(k, "joy")) return joystickUse ? 1 : 0;
+  if (!strcmp(k, "jdb")) return joystickDebounceMs;
+  if (!strcmp(k, "xdd")) return xDiameterDisplay ? 1 : 0;
+  if (!strcmp(k, "stm")) return stepTimeMs;
+  if (!strcmp(k, "sdl")) return delayBetweenStepsMs;
+  if (!strcmp(k, "wfen")) return wifiEnabled ? 1 : 0;
+  if (!strcmp(k, "wfpw")) return wifiPin;
+  return 0;
+}
+
+// Validates and applies a settings menu item, persisting it and re-deriving anything that
+// depends on it. Returns an error string to show the user, or NULL on success. The single place
+// a setting is written, so the menu and the serial restore command cannot disagree.
+const char* settingsWriteValue(int index, long value) {
+  const char* k = SETTINGS[index].prefKey;
+  Axis* a = settingsAxisOf(index);
+  if (a != NULL) {
+    if (!strcmp(k, "inv")) {
+      a->invertStepper = value != 0;
+      a->directionInitialized = false;
+    } else if (!strcmp(k, "bla")) {
+      a->backlashDu = value;
+    } else if (!strcmp(k, "scr")) {
+      if (value <= 0) return "Must be above 0";
+      a->screwPitch = value;
+    } else if (!strcmp(k, "mst")) {
+      if (value <= 0) return "Must be above 0";
+      a->motorStepsPerTurn = value;
+    } else if (!strcmp(k, "mtt")) {
+      if (value < 1 || value > 1000) return "Teeth must be 1-1000";
+      a->motorTeeth = value;
+    } else if (!strcmp(k, "stt")) {
+      if (value < 1 || value > 1000) return "Teeth must be 1-1000";
+      a->screwTeeth = value;
+    } else if (!strcmp(k, "sst")) {
+      if (value <= 0) return "Must be above 0";
+      if (value > a->speedManualMove) return "Above max speed";
+      a->speedStart = value;
+    } else if (!strcmp(k, "spd")) {
+      if (value < a->speedStart) return "Below start speed";
+      a->speedManualMove = value;
+    } else if (!strcmp(k, "acc")) {
+      if (value <= 0) return "Must be above 0";
+      a->acceleration = value;
+    } else if (!strcmp(k, "mtr")) {
+      if (value <= 0) return "Must be above 0";
+      a->maxTravelMm = value;
+    } else if (!strcmp(k, "rst")) {
+      a->needsRest = value != 0;
+    } else if (!strcmp(k, "act")) {
+      a->active = value != 0;
+    } else if (!strcmp(k, "rot")) {
+      a->rotational = value != 0;
+    } else {
+      return "Not a stored setting";
+    }
+    if (settingIsToggle(index)) {
+      settingsPutBool(a, k, value != 0);
+    } else {
+      settingsPutLong(a, k, value);
+    }
+    if (xSemaphoreTake(a->mutex, 100) == pdTRUE) {
+      recomputeAxisDerived(a);
+      xSemaphoreGive(a->mutex);
+    } else {
+      recomputeAxisDerived(a);
+    }
+    return NULL;
+  }
+
+  if (!strcmp(k, "eppr")) {
+    if (!calPprValid(value)) return "PPR must be 24-10000";
+    encoderPpr = value;
+  } else if (!strcmp(k, "einv")) {
+    encoderInvert = value != 0;
+  } else if (!strcmp(k, "est")) {
+    if (value < 1 || value > 1000) return "Teeth must be 1-1000";
+    encoderSpindleTeeth = value;
+  } else if (!strcmp(k, "ept")) {
+    if (value < 1 || value > 1000) return "Teeth must be 1-1000";
+    encoderPulleyTeeth = value;
+  } else if (!strcmp(k, "ediv")) {
+    if (value < 1 || value > 100) return "Divider must be 1-100";
+    encoderDivider = value;
+    encoderDivRemainder = 0;
+  } else if (!strcmp(k, "ebl")) {
+    if (value < 0 || value > 1000) return "Must be 0 to 1000";
+    encoderBacklash = value;
+  } else if (!strcmp(k, "eflt")) {
+    // 1023 is the counter's own ceiling. The RPM this allows depends on PPR and gearing -
+    // machine_config.h carries the formula.
+    if (value < 1 || value > 1023) return "Filter must be 1-1023";
+    encoderFilter = value;
+    pcnt_set_filter_value(PCNT_UNIT_0, encoderFilter);
+  } else if (!strcmp(k, "spp")) {
+    if (value < 0 || value > 99) return "Must be 0 to 99";
+    springPasses = value;
+  } else if (!strcmp(k, "pck")) {
+    peckDepthDu = value;
+  } else if (!strcmp(k, "fli")) {
+    flankInfeed = value != 0;
+  } else if (!strcmp(k, "rtd")) {
+    if (value <= 0) return "Must be above 0";
+    retractDu = value;
+  } else if (!strcmp(k, "slt")) {
+    if (value < 0) return "Must be 0 or above";
+    slotLeftReductionDu = value;
+  } else if (!strcmp(k, "safe")) {
+    if (value <= 0) return "Must be above 0";
+    safeDistanceDu = value;
+  } else if (!strcmp(k, "p1u")) {
+    pulse1Use = value != 0;
+  } else if (!strcmp(k, "p1i")) {
+    pulse1Invert = value != 0;
+  } else if (!strcmp(k, "p2u")) {
+    pulse2Use = value != 0;
+  } else if (!strcmp(k, "p2i")) {
+    pulse2Invert = value != 0;
+  } else if (!strcmp(k, "hppr")) {
+    if (value <= 0) return "Must be above 0";
+    pulsePerRevolution = value;
+  } else if (!strcmp(k, "pmw")) {
+    if (value < 0) return "Must be 0 or above";
+    pulseMinWidthUs = value;
+  } else if (!strcmp(k, "phb")) {
+    if (value < 0) return "Must be 0 or above";
+    pulseHalfBacklash = value;
+  } else if (!strcmp(k, "joy")) {
+    joystickUse = value != 0;
+  } else if (!strcmp(k, "jdb")) {
+    if (value < 0) return "Must be 0 or above";
+    joystickDebounceMs = value;
+  } else if (!strcmp(k, "xdd")) {
+    xDiameterDisplay = value != 0;
+  } else if (!strcmp(k, "stm")) {
+    if (value <= 0) return "Must be above 0";
+    stepTimeMs = value;
+  } else if (!strcmp(k, "sdl")) {
+    if (value < 0) return "Must be 0 or above";
+    delayBetweenStepsMs = value;
+  } else if (!strcmp(k, "wfen")) {
+    wifiEnabled = value != 0;
+  } else if (!strcmp(k, "wfpw")) {
+    if (!calWifiPinValid(value)) return "PIN must be 8 digits";
+    wifiPin = value;
+    // A live access point keeps the password it was started with, so cycle it to pick up the new
+    // one. Anyone currently connected is dropped, which is the point of changing it.
+    wifiRestart = true;
+  } else {
+    return "Not a stored setting";
+  }
+  if (settingIsToggle(index)) {
+    settingsPutGlobalBool(k, value != 0);
+  } else {
+    settingsPutGlobalLong(k, value);
+  }
+  // PPR, gearing and the divider all feed the counts-per-revolution figure.
+  applyEncoderPpr();
+  return NULL;
+}
+
+// Commits the numpad value to the currently selected settings menu item and persists it.
+void commitSetting() {
+  long raw = getNumpadResult();
+  resetNumpad();
+  // Distances are typed in microns or thou, everything else as a plain number.
+  const char* err = settingsWriteValue(settingsIndex, settingsUsesDu() ? numpadRawToDu(raw) : raw);
+  if (err != NULL) {
+    splashError(err);
+  }
+}
+
+// settingAxisLetter() spells the axis letters out so settings_table.h stays independent of the
+// machine configuration. If the two ever disagree, stored keys stop matching what the axes are
+// called, so tie them together at compile time.
+static_assert(NAME_Z == 'Z', "NAME_Z must match settingAxisLetter");
+static_assert(NAME_X == 'X', "NAME_X must match settingAxisLetter");
+static_assert(NAME_A1 == 'C', "NAME_A1 must match settingAxisLetter");
+
+// Storage key of a settings item as the serial and HTTP interfaces name it. Thin wrapper over the
+// pure settingKeyName() so the host tests exercise the same key composition the firmware uses.
+String settingsKeyName(int index) {
+  char buf[16];
+  settingKeyName(index, buf);
+  return String(buf);
+}
+
+// Every stored setting as lines that can be pasted straight back in to restore it, followed by
+// diagnostics. Machine config only - positions and stops are working state. One definition, so the
+// serial dump and the file the web UI offers for download are the same backup byte for byte.
+String settingsDumpText() {
+  String out = "; NanoEls H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) + " settings\n";
+  out += "; paste these lines back to restore, distances are in deci-microns\n";
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsAction(i)) continue;
+    out += "$" + settingsKeyName(i) + "=" + String(settingsReadValue(i)) + "\n";
+  }
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE, true);
+  out += "; nvs free entries " + String(pref.freeEntries()) + "\n";
+  pref.end();
+  out += "; nvs save batches since boot " + String(nvsSaveBatches) + "\n";
+  out += "; uptime seconds " + String(millis() / 1000) + "\n";
+  return out;
+}
+
+void dumpSettings() {
+  Serial.print(settingsDumpText());
+  Serial.println("ok");
+}
+
+// Whether it is safe to change a machine parameter right now. The settings menu can't be open
+// while an axis moves - entering it clears the jog flags and it swallows the keypad. Serial and
+// HTTP have no such protection, and changing screwPitch or motorSteps underneath a move in
+// progress would corrupt it, so they have to ask.
+bool machineIsBusy() {
+  return isOn || z.movingManually || x.movingManually || stepperIsRunning(&z) || stepperIsRunning(&x);
+}
+
+// Applies one setting by its storage key, with the same validation the settings menu uses.
+// Returns NULL on success or a message to show the user. The single entry point for every
+// transport that isn't the keypad, so serial and the web UI cannot drift apart in what they accept.
+const char* applySettingByKey(const String& key, long value) {
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsAction(i) || !key.equals(settingsKeyName(i))) continue;
+    if (machineIsBusy()) {
+      return "machine is busy";
+    }
+    // Hold the motion loop off while the value lands: settingsWriteValue() re-derives step counts
+    // and commits to NVS, and loop() must not read a half-updated axis in between.
+    if (xSemaphoreTake(motionMutex, 100) != pdTRUE) {
+      return "machine is busy";
+    }
+    const char* err = settingsWriteValue(i, value);
+    xSemaphoreGive(motionMutex);
+    return err;
+  }
+  return "unknown setting";
+}
+
+// Applies one "key=value" settings command from the serial port.
+void applySettingCommand(String command) {
+  command.trim();
+  if (command.length() == 0) {
+    dumpSettings();
+    return;
+  }
+  int eq = command.indexOf('=');
+  if (eq < 1) {
+    Serial.println("error: expected key=value");
+    return;
+  }
+  String key = command.substring(0, eq);
+  String value = command.substring(eq + 1);
+  key.trim();
+  value.trim();
+  const char* err = applySettingByKey(key, value.toInt());
+  Serial.println(err == NULL ? "ok" : "error: " + String(err));
+}
+
+// ---------------------------------------------------------------------------
+// WiFi access point, configuration UI and over-the-air updates
+// ---------------------------------------------------------------------------
+//
+// Nothing here runs unless the "Enabled" item in Settings > WiFi & updates is on. The page is
+// generated from the same SETTINGS[] table the LCD menu walks, and every write goes through
+// applySettingByKey(), so the two front ends cannot disagree about labels, ordering, units or
+// what values are legal.
+
+String otaError = ""; // Set by the upload handler, reported by the handler that answers the POST
+bool otaWritten = false; // Whether a complete image actually landed, so an empty POST can't reboot
+long otaKb = 0; // Kilobytes written so far, for the LCD
+long otaLcdHash = LCD_HASH_INITIAL;
+
+// Labels and error strings are ASCII and under our control, but one stray quote would produce a
+// document the page silently fails to parse, which is a miserable thing to debug over WiFi.
+void settingsMove(int delta) {
+  int first = settingSectionFirst(settingsSection);
+  int count = settingSectionCount(settingsSection);
+  if (first < 0 || count < 1) return;
+  int at = settingsIndex - first;
+  at = ((at + delta) % count + count) % count;
+  settingsIndex = first + at;
+  resetNumpad();
+}
+
+void processSettingsKeypress(int keyCode) {
+  if (keyCode == B_SETTINGS) {
+    exitSettingsScreens();
+    return;
+  }
+  if (inThreadPicker) {
+    int digit = keyCodeToDigit(keyCode);
+    if (digit >= 1 && digit <= 6) {
+      for (int i = 0; i < THREAD_PRESETS_COUNT; i++) {
+        if (strstr(THREAD_PRESETS[i].name, THREAD_CATEGORY_MARKERS[digit - 1]) != NULL) {
+          threadPickerIndex = i;
+          break;
+        }
+      }
+    } else if (keyCode == B_UP) {
+      threadPickerIndex = (threadPickerIndex + THREAD_PRESETS_COUNT - 1) % THREAD_PRESETS_COUNT;
+    } else if (keyCode == B_DOWN) {
+      threadPickerIndex = (threadPickerIndex + 1) % THREAD_PRESETS_COUNT;
+    } else if (keyCode == B_LEFT) {
+      threadPickerIndex = (threadPickerIndex + THREAD_PRESETS_COUNT - 10) % THREAD_PRESETS_COUNT;
+    } else if (keyCode == B_RIGHT) {
+      threadPickerIndex = (threadPickerIndex + 10) % THREAD_PRESETS_COUNT;
+    } else if (keyCode == B_ON) {
+      setMeasure(THREAD_PRESETS[threadPickerIndex].measure);
+      setDupr(THREAD_PRESETS[threadPickerIndex].dupr);
+      setStarts(1);
+      exitSettingsScreens();
+    } else if (keyCode == B_OFF) {
+      exitSettingsScreens();
+    }
+    return;
+  }
+
+  // Directory of sections.
+  if (settingsSection < 0) {
+    if (keyCode == B_UP) {
+      settingsDirIndex = (settingsDirIndex + SECTION_COUNT - 1) % SECTION_COUNT;
+    } else if (keyCode == B_DOWN) {
+      settingsDirIndex = (settingsDirIndex + 1) % SECTION_COUNT;
+    } else if (keyCode == B_LEFT) {
+      settingsDirIndex = (settingsDirIndex + SECTION_COUNT - 3) % SECTION_COUNT;
+    } else if (keyCode == B_RIGHT) {
+      settingsDirIndex = (settingsDirIndex + 3) % SECTION_COUNT;
+    } else if (keyCode == B_ON) {
+      int first = settingSectionFirst(settingsDirIndex);
+      if (first < 0) {
+        beep();
+        return;
+      }
+      settingsSection = settingsDirIndex;
+      settingsIndex = first;
+      resetNumpad();
+    } else if (keyCode == B_OFF) {
+      exitSettingsScreens();
+    }
+    return;
+  }
+
+  // Inside a section.
+  if (keyCode == B_OFF) {
+    // Back to the directory rather than straight out, so a wrong turn costs one keypress.
+    settingsSection = -1;
+    resetNumpad();
+    return;
+  }
+  int digit = keyCodeToDigit(keyCode);
+  if (digit >= 0) {
+    numpadPress(digit);
+  } else if (keyCode == B_BACKSPACE) {
+    numpadBackspace();
+  } else if (keyCode == B_UP) {
+    settingsMove(-1);
+  } else if (keyCode == B_DOWN) {
+    settingsMove(1);
+  } else if (keyCode == B_LEFT) {
+    settingsMove(-3);
+  } else if (keyCode == B_RIGHT) {
+    settingsMove(3);
+  } else if (settingIsAction(settingsIndex)) {
+    if (keyCode == B_ON) {
+      if (isOn) {
+        splashError("Turn off first");
+      } else {
+        enterCalScreen();
+      }
+    }
+  } else if (settingsIsToggle()) {
+    if (keyCode == B_ON || keyCode == B_PLUS || keyCode == B_MINUS) {
+      const char* err = settingsWriteValue(settingsIndex, settingsReadValue(settingsIndex) == 0 ? 1 : 0);
+      if (err != NULL) splashError(err);
+    }
+  } else if (keyCode == B_ON && numpadIndex > 0) {
+    commitSetting();
+  } else if (keyCode == B_ON) {
+    beep();
+  }
+}
+
+long getSettingsValueHash() {
+  if (settingsSection < 0) return settingsDirIndex * 31L + 7L;
+  // wifiUp is in here because the WiFi section prints the address beside the value, and the access
+  // point can finish coming up after the screen has already been drawn.
+  return settingsReadValue(settingsIndex) * 3L + settingsIndex * 101L + (wifiUp ? 977L : 0L);
+}
+
+void updateSettingsDisplay() {
+  long newHash = (inThreadPicker
+      ? (2000000 + threadPickerIndex)
+      : (settingsSection * 1000003L + numpadIndex * 7 + getNumpadResult() * 13 + getSettingsValueHash() + measure))
+      + (splashActive() ? splashId * 7919 : 0);
+  if (newHash == settingsLcdHash) {
+    return;
+  }
+  settingsLcdHash = newHash;
+  int charIndex = 0;
+  if (inThreadPicker) {
+    lcd.setCursor(0, 0);
+    charIndex = lcd.print("Thread ");
+    charIndex += lcd.print(threadPickerIndex + 1);
+    charIndex += lcd.print(" of ");
+    charIndex += lcd.print(THREAD_PRESETS_COUNT);
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 1);
+    charIndex = lcd.print(THREAD_PRESETS[threadPickerIndex].name);
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 2);
+    charIndex = lcd.print("Pitch ");
+    if (THREAD_PRESETS[threadPickerIndex].measure == MEASURE_METRIC) {
+      charIndex += printNoTrailing0(THREAD_PRESETS[threadPickerIndex].dupr / 10000.0);
+      charIndex += lcd.write(customCharMmCode);
+    } else {
+      charIndex += lcd.print(int(round(254000.0 / THREAD_PRESETS[threadPickerIndex].dupr)));
+      charIndex += lcd.print("tpi");
+    }
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 3);
+    charIndex = lcd.print("ON use, 1-6 groups");
+    printLcdSpaces(charIndex);
+    return;
+  }
+
+  // Directory: three sections at a time with a cursor, scrolled to keep the selection visible.
+  if (settingsSection < 0) {
+    lcd.setCursor(0, 0);
+    charIndex = lcd.print("Settings ");
+    charIndex += lcd.print(settingsDirIndex + 1);
+    charIndex += lcd.print("/");
+    charIndex += lcd.print((int) SECTION_COUNT);
+    printLcdSpaces(charIndex);
+    int top = settingsDirIndex - 1;
+    if (top < 0) top = 0;
+    if (top > SECTION_COUNT - 3) top = SECTION_COUNT - 3;
+    if (top < 0) top = 0;
+    for (int row = 0; row < 3; row++) {
+      lcd.setCursor(0, row + 1);
+      int at = top + row;
+      charIndex = 0;
+      if (at < SECTION_COUNT) {
+        charIndex = lcd.print(at == settingsDirIndex ? ">" : " ");
+        charIndex += lcd.print(SECTION_NAMES[at]);
+      }
+      printLcdSpaces(charIndex);
+    }
+    return;
+  }
+
+  // Inside a section: one item at a time, since a value has to be typed into it.
+  int first = settingSectionFirst(settingsSection);
+  int count = settingSectionCount(settingsSection);
+  lcd.setCursor(0, 0);
+  charIndex = lcd.print(SECTION_NAMES[settingsSection]);
+  charIndex += lcd.print(" ");
+  charIndex += lcd.print(settingsIndex - first + 1);
+  charIndex += lcd.print("/");
+  charIndex += lcd.print(count);
+  printLcdSpaces(charIndex);
+
+  lcd.setCursor(0, 1);
+  charIndex = lcd.print(SETTINGS[settingsIndex].label);
+  printLcdSpaces(charIndex);
+
+  lcd.setCursor(0, 2);
+  charIndex = 0;
+  if (!settingIsAction(settingsIndex)) {
+    charIndex = lcd.print("Now ");
+    long value = settingsReadValue(settingsIndex);
+    if (settingIsToggle(settingsIndex)) {
+      const char* on = SETTINGS[settingsIndex].onLabel;
+      const char* off = SETTINGS[settingsIndex].offLabel;
+      charIndex += lcd.print(value ? (on ? on : "on") : (off ? off : "off"));
+    } else if (settingUsesDu(settingsIndex)) {
+      // A distance has no fixed unit - it is typed and shown in whichever system is selected.
+      charIndex += printDeciMicrons(value, 5);
+      charIndex += lcd.print(measure == MEASURE_METRIC ? " mm" : "\"");
+    } else {
+      charIndex += lcd.print(value);
+      const char* unit = SETTINGS[settingsIndex].unit;
+      // Only if it fits: a value wide enough to crowd the unit out would otherwise wrap onto the
+      // next line and overwrite it.
+      if (unit != 0 && charIndex + 1 + (int) strlen(unit) <= 20) {
+        charIndex += lcd.print(" ");
+        charIndex += lcd.print(unit);
+      }
+    }
+  } else {
+    charIndex = lcd.print(CAL_ROUTINES_COUNT);
+    charIndex += lcd.print(" routines");
+  }
+  // The whole point of the WiFi section is to get you to a browser, so the address goes where you
+  // are already looking rather than in a manual. Only beside the on/off item: "Now yes" padded to
+  // column 9 leaves exactly the 11 columns an address needs, whereas "Now 13572468" beside the PIN
+  // would leave three and wrap onto the line below.
+  if (SETTINGS[settingsIndex].section == SEC_WIFI && wifiUp && settingIsToggle(settingsIndex)) {
+    String ip = WiFi.softAPIP().toString();
+    if (charIndex + 1 + (int) ip.length() <= 20) {
+      while (charIndex < 20 - (int) ip.length()) {
+        charIndex += lcd.print(" ");
+      }
+      charIndex += lcd.print(ip);
+    }
+  }
+  printLcdSpaces(charIndex);
+
+  lcd.setCursor(0, 3);
+  if (splashActive()) {
+    charIndex = lcd.print(splashBuf);
+  } else if (settingIsAction(settingsIndex)) {
+    charIndex = lcd.print("ON to open");
+  } else if (settingsIsToggle()) {
+    charIndex = lcd.print("ON to toggle");
+  } else if (numpadIndex > 0) {
+    charIndex = lcd.print("Use ");
+    if (settingsUsesDu()) {
+      charIndex += printDeciMicrons(numpadRawToDu(getNumpadResult()), 5);
+      charIndex += lcd.print(measure == MEASURE_METRIC ? " mm" : "\"");
+    } else {
+      charIndex += lcd.print(getNumpadResult());
+      // Confirming a bare number invites entering it in the wrong unit, so name it here too.
+      const char* unit = SETTINGS[settingsIndex].unit;
+      if (unit != 0 && charIndex + 2 + (int) strlen(unit) <= 20) {
+        charIndex += lcd.print(" ");
+        charIndex += lcd.print(unit);
+      }
+    }
+    charIndex += lcd.print("?");
+  } else if (settingsUsesDu()) {
+    charIndex = lcd.print(measure == MEASURE_INCH ? "Type thou, then ON" : "Type microns, ON");
+  } else {
+    charIndex = lcd.print("Type number, ON");
+  }
+  printLcdSpaces(charIndex);
+}
+
+int joystickPin(int i) {
+  if (i < 4) return JOYSTICK_DIR_PIN_KEYS[i][0];
+  return i == 4 ? JOYSTICK_MOVE_PIN : JOYSTICK_STEP_PIN;
+}
+
+// Polls the joystick and returns a keypad-style event (keyCode with bit 7 set on press) or 0 if nothing changed.
+// Stick deflection alone produces no events: arrow key presses are emitted while the move button is held and the
+// stick is deflected, releases when either ends. The step button maps directly to the keypad step button.
+int getJoystickEvent() {
+  unsigned long now = millis();
+  for (int i = 0; i < 6; i++) {
+    bool active = DREAD(joystickPin(i)) == LOW;
+    if (active != joystickPinActive[i] && now - joystickChangeMs[i] >= joystickDebounceMs) {
+      joystickPinActive[i] = active;
+      joystickChangeMs[i] = now;
+      if (i == 5) {
+        int event = B_STEP;
+        bitWrite(event, 7, active ? 1 : 0);
+        return event;
+      }
+    }
+  }
+  for (int i = 0; i < 4; i++) {
+    bool pressed = joystickPinActive[i] && joystickPinActive[4];
+    if (pressed != joystickDirPressed[i]) {
+      joystickDirPressed[i] = pressed;
+      int event = JOYSTICK_DIR_PIN_KEYS[i][1];
+      bitWrite(event, 7, pressed ? 1 : 0);
+      return event;
+    }
+  }
+  return 0;
+}
+
+// Axis that the running calibration routine refers to, NULL for the encoder and diagnostic ones.
+Axis* calAxis() {
+  if (calRoutine < 0 || calRoutine > CAL_SPEED_X) return NULL;
+  return calRoutine % 2 == 0 ? &z : &x;
+}
+
+long axisDuToSteps(Axis* a, long du) {
+  return calDuToSteps(a->screwPitch, a->motorSteps, du);
+}
+
+// Same mutex dance commitSetting() uses when re-deriving values behind the motion tasks' back.
+void calRecompute(Axis* a) {
+  if (xSemaphoreTake(a->mutex, 100) == pdTRUE) {
+    recomputeAxisDerived(a);
+    xSemaphoreGive(a->mutex);
+  } else {
+    recomputeAxisDerived(a);
+  }
+}
+
+// Commands a validated relative move using the same path as manual numpad moves. Unlike those,
+// an out-of-range move is refused rather than clamped: a silently shortened test move would
+// corrupt the measurement it feeds.
+bool calRequestMove(Axis* a, long deltaSteps) {
+  if (isOn || a->movingManually) {
+    beep();
+    return false;
+  }
+  // A commanded move is still outstanding. Issuing another now would retarget from wherever the
+  // axis has got to, compounding the two into a longer move than either - which is exactly what
+  // an impatient second press of ON or plus would otherwise do.
+  if (a->pendingPos != 0) {
+    beep();
+    return false;
+  }
+  long target = a->pos + deltaSteps;
+  if (target > a->leftStop || target < a->rightStop) {
+    splashError("Limited by stop");
+    return false;
+  }
+  if (abs(deltaSteps) > a->estopSteps) {
+    splashError("Too far, ignored");
+    return false;
+  }
+  a->speedMax = a->speedManualMove;
+  stepToFinal(a, target);
+  return true;
+}
+
+void calClearJogFlags() {
+  buttonLeftPressed = false;
+  buttonRightPressed = false;
+  buttonUpPressed = false;
+  buttonDownPressed = false;
+}
+
+// Undoes everything the running routine changed for the duration of the measurement. Must be
+// reachable from every exit path, aborts included, or backlash and speed stay clobbered.
+void calStopRoutine() {
+  Axis* a = calAxis();
+  if (a != NULL) {
+    if ((calRoutine == CAL_SPEED_Z || calRoutine == CAL_SPEED_X) && calSaved > 0) {
+      a->speedManualMove = calSaved;
+    }
+    a->speedMax = LONG_MAX;
+    // Backlash compensation is suppressed while it is being measured; always restore it.
+    calRecompute(a);
+  }
+  calClearJogFlags();
+  calRoutine = -1;
+  calStep = 0;
+  calValue = 0;
+  calPrev = 0;
+  calSaved = 0;
+  calRefPos = 0;
+  calDirMoved = false;
+  resetNumpad();
+}
+
+void enterCalScreen() {
+  inSettings = false;
+  inThreadPicker = false;
+  inCal = true;
+  calRoutine = -1;
+  calListIndex = 0;
+  calStep = 0;
+  calLastKeyCode = -1;
+  resetNumpad();
+  inNumpad = false;
+  calLcdHash = LCD_HASH_INITIAL;
+  calClearJogFlags();
+  buttonGearsPressed = false;
+  buttonTurnPressed = false;
+  buttonAPressed = false;
+}
+
+// Calibration is opened from the settings menu, so leaving it returns there.
+void exitCalScreen() {
+  calStopRoutine();
+  inCal = false;
+  inSettings = true;
+  settingsLcdHash = LCD_HASH_INITIAL;
+  resetNumpad();
+  inNumpad = false;
+}
+
+void calStartRoutine(int r) {
+  calRoutine = r;
+  calStep = 0;
+  calValue = 0;
+  calPrev = 0;
+  calSaved = 0;
+  calRefPos = 0;
+  calDirMoved = false;
+  calParamIndex = 2; // 10mm test move, or 10 revolutions
+  calRefSpindle = spindlePos;
+  resetNumpad();
+  Axis* a = calAxis();
+  if (r == CAL_BACKLASH_Z || r == CAL_BACKLASH_X) {
+    // Measuring backlash needs the compensation out of the way or it just measures itself.
+    a->backlashSteps = 0;
+  } else if (r == CAL_SPEED_Z || r == CAL_SPEED_X) {
+    calSaved = a->speedManualMove;
+    calValue = a->speedManualMove;
+  } else if (r == CAL_ENC_SIGNAL) {
+    encoderReversals = 0;
+  }
+}
+
+void calOnPress() {
+  Axis* a = calAxis();
+  switch (calRoutine) {
+    case CAL_PITCH_Z:
+    case CAL_PITCH_X:
+      if (calStep == 0) {
+        // Pre-load in the same direction as the test move so the slack is already taken up
+        // when the indicator is zeroed. Without this the test move would silently include
+        // however wrong the current backlash setting is - see calStep 1.
+        if (calRequestMove(a, axisDuToSteps(a, CAL_PITCH_PRELOAD_DU))) calStep = 1;
+      } else if (calStep == 1) {
+        // Same direction as the pre-load, so no backlash compensation is applied at all and
+        // the measurement does not depend on backlashDu being correct yet.
+        if (calRequestMove(a, axisDuToSteps(a, CAL_TEST_DU[calParamIndex]))) calStep = 2;
+      } else if (calStep == 2) {
+        if (numpadIndex == 0) {
+          beep();
+          break;
+        }
+        long raw = getNumpadResult();
+        long actualDu = numpadRawToDu(raw);
+        long nominalDu = CAL_TEST_DU[calParamIndex];
+        resetNumpad();
+        if (actualDu <= 0) {
+          splashError("Must be above 0");
+          break;
+        }
+        long newPitch = calCorrectedPitch(a->screwPitch, actualDu, nominalDu);
+        if (!calPitchPlausible(a->screwPitch, newPitch)) {
+          splashError("Off by >20%, check");
+          break;
+        }
+        calValue = newPitch;
+        calStep = 3;
+      } else {
+        a->screwPitch = calValue;
+        settingsPutLong(a, "scr", calValue);
+        calRecompute(a);
+        splash("Screw pitch saved");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_BACKLASH_Z:
+    case CAL_BACKLASH_X:
+      if (calStep == 0) {
+        if (calRequestMove(a, axisDuToSteps(a, CAL_BACKLASH_LOAD_DU))) calStep = 1;
+      } else if (calStep == 1) {
+        calRefPos = a->pos;
+        calStep = 2;
+      } else if (calStep == 2) {
+        calValue = stepsToDu(a, abs(calRefPos - a->pos));
+        calStep = 3;
+      } else {
+        a->backlashDu = calValue;
+        settingsPutLong(a, "bla", calValue);
+        calRecompute(a);
+        splash("Backlash saved");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_DIR_Z:
+    case CAL_DIR_X:
+      if (!calDirMoved) {
+        if (calRequestMove(a, axisDuToSteps(a, CAL_DIR_MOVE_DU))) calDirMoved = true;
+      } else {
+        splash("Direction kept");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_TRAVEL_Z:
+    case CAL_TRAVEL_X:
+      if (calStep == 0) {
+        calRefPos = a->pos;
+        calStep = 1;
+      } else if (calStep == 1) {
+        long mm = calTravelMm(stepsToDu(a, abs(a->pos - calRefPos)));
+        if (mm < 1) {
+          splashError("Span too small");
+          break;
+        }
+        calValue = mm;
+        calStep = 2;
+        // Leaving the jog steps while an arrow is still held would strand its flag set and
+        // leave the axis running, since the release no longer reaches the jog passthrough.
+        calClearJogFlags();
+      } else {
+        a->maxTravelMm = calValue;
+        settingsPutLong(a, "mtr", calValue);
+        calRecompute(a);
+        splash("Max travel saved");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_SPEED_Z:
+    case CAL_SPEED_X:
+      if (calStep == 0) {
+        calValue = a->speedManualMove;
+        calStep = 1;
+      } else if (calStep == 1) {
+        // One stroke at the current trial speed, alternating direction, then step it up 10%.
+        a->speedManualMove = calValue;
+        calRecompute(a);
+        long steps = axisDuToSteps(a, CAL_SPEED_STROKE_DU);
+        if (calRequestMove(a, calRefPos == 0 ? steps : -steps)) {
+          calRefPos = calRefPos == 0 ? 1 : 0;
+          calPrev = calValue;
+          calValue = calSpeedNext(calValue);
+        }
+      } else {
+        a->speedManualMove = calValue;
+        settingsPutLong(a, "spd", calValue);
+        calRecompute(a);
+        // Keep the new value: tell calStopRoutine there is nothing to restore.
+        calSaved = 0;
+        splash("Max speed saved");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_ENC_PPR:
+      if (calStep == 0) {
+        calRefSpindle = spindlePos;
+        calStep = 1;
+      } else if (calStep == 1) {
+        // You turn the SPINDLE, but PPR is a property of the encoder, so undo the gearing and
+        // the divider to get back to raw encoder counts before deriving it.
+        long rawCounts = (spindlePos - calRefSpindle) * encoderDivider * encoderPulleyTeeth;
+        long ppr = calPprFromCounts(rawCounts, CAL_REVS[calParamIndex] * encoderSpindleTeeth);
+        if (!calPprValid(ppr)) {
+          splashError("PPR must be 24-10000");
+          break;
+        }
+        calValue = calSnapPpr(ppr);
+        calStep = 2;
+      } else {
+        encoderPpr = calValue;
+        applyEncoderPpr();
+        Preferences pref;
+        pref.begin(PREF_NAMESPACE);
+        pref.putInt(PREF_ENCODER_PPR, encoderPpr);
+        pref.end();
+        splash("Encoder PPR saved");
+        calStopRoutine();
+      }
+      break;
+
+    case CAL_ENC_DIR:
+      splash(encoderInvert ? "Encoder inverted" : "Encoder normal");
+      calStopRoutine();
+      break;
+  }
+}
+
+// Repeats the move belonging to the current step without advancing. Bound to the plus key, the
+// mirror of minus: minus goes back a step, plus runs where you are again. For taking up more
+// slack, watching a direction check a second time, or hearing the same speed again before
+// deciding it stalled.
+void calRepeatMove() {
+  Axis* a = calAxis();
+  switch (calRoutine) {
+    case CAL_PITCH_Z:
+    case CAL_PITCH_X:
+      // Only before the test move. Repeating that one would add a second test distance while
+      // the indicator still reads from the first, so the total would no longer match the
+      // nominal it gets compared against. Step back with minus and re-zero instead.
+      if (calStep <= 1) {
+        calRequestMove(a, axisDuToSteps(a, CAL_PITCH_PRELOAD_DU));
+        return;
+      }
+      break;
+
+    case CAL_BACKLASH_Z:
+    case CAL_BACKLASH_X:
+      // Same reasoning: only while still loading the axis, before the indicator is zeroed.
+      if (calStep <= 1) {
+        calRequestMove(a, axisDuToSteps(a, CAL_BACKLASH_LOAD_DU));
+        return;
+      }
+      break;
+
+    case CAL_DIR_Z:
+    case CAL_DIR_X:
+      if (calRequestMove(a, axisDuToSteps(a, CAL_DIR_MOVE_DU))) {
+        calDirMoved = true;
+      }
+      return;
+
+    case CAL_SPEED_Z:
+    case CAL_SPEED_X:
+      if (calStep == 1) {
+        // The same speed again rather than stepping up 10%. calPrev has to follow, or calling
+        // the stall afterwards would back off from the speed before this one.
+        a->speedManualMove = calValue;
+        calRecompute(a);
+        long steps = axisDuToSteps(a, CAL_SPEED_STROKE_DU);
+        if (calRequestMove(a, calRefPos == 0 ? steps : -steps)) {
+          calRefPos = calRefPos == 0 ? 1 : 0;
+          calPrev = calValue;
+        }
+        return;
+      }
+      break;
+  }
+  beep();
+}
+
+// Steps a routine back so a wrong entry can be redone without aborting and repeating the
+// physical moves. Bound to the minus key, which is the only one free at every step: the arrows
+// are taken by jogging and parameter adjustment, and backspace edits the numpad.
+//
+// Stepping back never un-does a move, it only returns to the earlier prompt. That is safe here
+// because every repeatable move in these routines goes the same direction as the one before it,
+// so running one again leaves the axis loaded exactly as it was.
+void calBack() {
+  switch (calRoutine) {
+    case CAL_DIR_Z:
+    case CAL_DIR_X:
+      // Run the test move again if you missed which way it went.
+      if (calDirMoved) {
+        calDirMoved = false;
+        return;
+      }
+      break;
+
+    case CAL_SPEED_Z:
+    case CAL_SPEED_X:
+      // Only from the confirm screen. Going back further would re-baseline the ramp from a
+      // speed the routine has already been changing, and lose the original in calSaved.
+      if (calStep == 2) {
+        calValue = calPrev > 0 ? calPrev : calSaved;
+        calStep = 1;
+        return;
+      }
+      break;
+
+    case CAL_PITCH_Z:
+    case CAL_PITCH_X:
+    case CAL_BACKLASH_Z:
+    case CAL_BACKLASH_X:
+    case CAL_TRAVEL_Z:
+    case CAL_TRAVEL_X:
+    case CAL_ENC_PPR:
+      if (calStep > 0) {
+        calValue = 0;
+        calStep--;
+        resetNumpad();
+        // Stepping back into a jogging step must not inherit a stale held-arrow flag.
+        calClearJogFlags();
+        return;
+      }
+      break;
+  }
+  beep();
+}
+
+// Left/right while a routine is running. dir is -1 for left, +1 for right.
+void calAdjust(int dir) {
+  Axis* a = calAxis();
+  switch (calRoutine) {
+    case CAL_PITCH_Z:
+    case CAL_PITCH_X:
+      if (calStep == 0) calParamIndex = (calParamIndex + CAL_TEST_DU_COUNT + dir) % CAL_TEST_DU_COUNT;
+      break;
+
+    case CAL_BACKLASH_Z:
+    case CAL_BACKLASH_X:
+      // Nudge back against the loaded direction one moveStep at a time. Right nudges forward again
+      // so an overshoot can be walked back instead of restarting the routine; the measurement is
+      // the distance from calRefPos either way, so it stays correct.
+      if (calStep == 2) calRequestMove(a, axisDuToSteps(a, moveStep) * dir);
+      break;
+
+    case CAL_DIR_Z:
+    case CAL_DIR_X:
+      if (calDirMoved && dir < 0) {
+        a->invertStepper = !a->invertStepper;
+        a->directionInitialized = false;
+        settingsPutBool(a, "inv", a->invertStepper);
+        splash("Direction flipped");
+        calDirMoved = false; // move again so the user can confirm the new direction
+      }
+      break;
+
+    case CAL_SPEED_Z:
+    case CAL_SPEED_X:
+      if (calStep == 1 && dir < 0 && calPrev > 0) {
+        calValue = calSpeedBackoff(calPrev, a->speedStart);
+        calStep = 2;
+      }
+      break;
+
+    case CAL_ENC_PPR:
+      if (calStep == 0) calParamIndex = (calParamIndex + CAL_REVS_COUNT + dir) % CAL_REVS_COUNT;
+      break;
+
+    case CAL_ENC_DIR:
+      if (dir < 0) {
+        encoderInvert = !encoderInvert;
+        settingsPutGlobalBool(PREF_ENCODER_INVERT, encoderInvert);
+        calRefSpindle = spindlePos;
+      }
+      break;
+
+    case CAL_ENC_SIGNAL:
+      if (dir < 0) {
+        encoderReversals = 0;
+        calRefSpindle = spindlePos;
+      }
+      break;
+  }
+}
+
+void processCalKeypress(int keyCode, bool isPress) {
+  // The travel limit routines are jogged by hand, so their arrow keys drive the normal manual
+  // move flags that taskMoveZ / taskMoveX already act on. This is why we need releases here.
+  if ((calRoutine == CAL_TRAVEL_Z || calRoutine == CAL_TRAVEL_X) && calStep < 2) {
+    if (calRoutine == CAL_TRAVEL_Z && (keyCode == B_LEFT || keyCode == B_RIGHT)) {
+      if (keyCode == B_LEFT) buttonLeftPressed = isPress;
+      else buttonRightPressed = isPress;
+      return;
+    }
+    if (calRoutine == CAL_TRAVEL_X && (keyCode == B_UP || keyCode == B_DOWN)) {
+      if (keyCode == B_UP) buttonUpPressed = isPress;
+      else buttonDownPressed = isPress;
+      return;
+    }
+  }
+
+  // The input tester swallows every key on purpose, so it needs a hold-to-exit escape.
+  if (calRoutine == CAL_INPUTS) {
+    calLastKeyCode = keyCode;
+    calLastKeyPress = isPress;
+    if (keyCode == B_OFF) {
+      if (isPress) calOffPressMs = millis();
+      else if (millis() - calOffPressMs >= 1000) calStopRoutine();
+    }
+    return;
+  }
+
+  if (!isPress) return;
+
+  if (keyCode == B_OFF) {
+    calRoutine < 0 ? exitCalScreen() : calStopRoutine();
+    return;
+  }
+
+  if (calRoutine < 0) {
+    if (keyCode == B_UP) calListIndex = (calListIndex + CAL_ROUTINES_COUNT - 1) % CAL_ROUTINES_COUNT;
+    else if (keyCode == B_DOWN) calListIndex = (calListIndex + 1) % CAL_ROUTINES_COUNT;
+    else if (keyCode == B_LEFT) calListIndex = (calListIndex + CAL_ROUTINES_COUNT - 4) % CAL_ROUTINES_COUNT;
+    else if (keyCode == B_RIGHT) calListIndex = (calListIndex + 4) % CAL_ROUTINES_COUNT;
+    else if (keyCode == B_ON) calStartRoutine(calListIndex);
+    return;
+  }
+
+  int digit = keyCodeToDigit(keyCode);
+  if (digit >= 0) numpadPress(digit);
+  else if (keyCode == B_BACKSPACE) numpadBackspace();
+  else if (keyCode == B_LEFT) calAdjust(-1);
+  else if (keyCode == B_RIGHT) calAdjust(1);
+  else if (keyCode == B_MINUS) calBack();
+  else if (keyCode == B_PLUS) calRepeatMove();
+  // Same 1mm / 0.1mm / 0.01mm ladder the main screen uses, so the backlash nudge and the travel
+  // limit jog can both be taken down to 0.01mm without the user leaving the routine.
+  else if (keyCode == B_STEP) buttonMoveStepPress();
+  else if (keyCode == B_ON) calOnPress();
+}
+
+// Current value of the machine parameter a routine calibrates, shown under it in the list.
+int calPrintNow(int r) {
+  if (r == CAL_ENC_SIGNAL || r == CAL_INPUTS) {
+    return lcd.print("Diagnostic, no moves");
+  }
+  Axis* a = r <= CAL_SPEED_X ? (r % 2 == 0 ? &z : &x) : NULL;
+  int n = lcd.print("Now ");
+  switch (r) {
+    case CAL_PITCH_Z: case CAL_PITCH_X: n += printDeciMicrons((long) round(a->screwPitch), 5); break;
+    case CAL_BACKLASH_Z: case CAL_BACKLASH_X: n += printDeciMicrons(a->backlashDu, 5); break;
+    case CAL_DIR_Z: case CAL_DIR_X: n += lcd.print(a->invertStepper ? "inverted" : "normal"); break;
+    case CAL_TRAVEL_Z: case CAL_TRAVEL_X: n += lcd.print(a->maxTravelMm); n += lcd.print("mm"); break;
+    case CAL_SPEED_Z: case CAL_SPEED_X: n += lcd.print(a->speedManualMove); n += lcd.print(" st/s"); break;
+    case CAL_ENC_PPR: n += lcd.print(encoderPpr); n += lcd.print(" ppr"); break;
+    case CAL_ENC_DIR: n += lcd.print(encoderInvert ? "inverted" : "normal"); break;
+  }
+  return n;
+}
+
+long getCalHash() {
+  long h = (calRoutine + 2) * 1000003L + calStep * 10007L + calListIndex * 101L
+      + calParamIndex * 7L + calValue * 3L + calPrev + measure + (calDirMoved ? 5 : 0);
+  if (numpadIndex > 0) h += numpadIndex * 31L + getNumpadResult() * 13L;
+  if (splashActive()) h += splashId * 7919L;
+  switch (calRoutine) {
+    case CAL_ENC_SIGNAL:
+      h += spindlePos * 3L + encoderReversals * 11L + getApproxRpm() * 13L;
+      break;
+    case CAL_ENC_PPR:
+    case CAL_ENC_DIR:
+      h += (spindlePos - calRefSpindle) * 3L;
+      break;
+    case CAL_INPUTS:
+      h += calLastKeyCode * 37L + (calLastKeyPress ? 1 : 0);
+      // Only meaningful when the pins have been configured - see updateCalDisplay.
+      if (joystickUse) {
+        for (int i = 0; i < 6; i++) {
+          if (DREAD(joystickPin(i)) == LOW) h += 1L << i;
+        }
+      }
+      break;
+    case CAL_BACKLASH_Z: case CAL_BACKLASH_X:
+    case CAL_TRAVEL_Z: case CAL_TRAVEL_X:
+      // moveStep is in the hash because both routines now let the STEP key change it in place.
+      h += calAxis()->pos * 3L + moveStep * 17L;
+      break;
+  }
+  return h;
+}
+
+void updateCalDisplay() {
+  long newHash = getCalHash();
+  if (newHash == calLcdHash) {
+    return;
+  }
+  calLcdHash = newHash;
+  Axis* a = calAxis();
+  int charIndex = 0;
+  const char* hint = "";
+
+  if (calRoutine < 0) {
+    lcd.setCursor(0, 0);
+    charIndex = lcd.print("Calibrate ");
+    charIndex += lcd.print(calListIndex + 1);
+    charIndex += lcd.print(" of ");
+    charIndex += lcd.print(CAL_ROUTINES_COUNT);
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 1);
+    charIndex = lcd.print(CAL_ROUTINES[calListIndex]);
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 2);
+    charIndex = calPrintNow(calListIndex);
+    printLcdSpaces(charIndex);
+    lcd.setCursor(0, 3);
+    charIndex = splashActive() ? lcd.print(splashBuf) : lcd.print("ON start, OFF exit");
+    printLcdSpaces(charIndex);
+    return;
+  }
+
+  lcd.setCursor(0, 0);
+  charIndex = lcd.print(CAL_ROUTINES[calRoutine]);
+  printLcdSpaces(charIndex);
+
+  switch (calRoutine) {
+    case CAL_PITCH_Z:
+    case CAL_PITCH_X:
+      lcd.setCursor(0, 1);
+      if (calStep == 0) {
+        charIndex = lcd.print("Test ");
+        charIndex += printDeciMicrons(CAL_TEST_DU[calParamIndex], 5);
+        charIndex += lcd.print(measure == MEASURE_INCH ? "\"" : "mm");
+        hint = "<> size, ON load";
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Slack taken up");
+        hint = "Zero dial, ON move";
+      } else if (calStep == 2) {
+        charIndex = lcd.print("Actual travel?");
+        hint = "Type + ON, - back";
+      } else {
+        charIndex = printDeciMicrons((long) round(a->screwPitch), 5);
+        charIndex += lcd.print(" > ");
+        charIndex += printDeciMicrons(calValue, 5);
+        hint = "- redo, ON save";
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      if (calStep == 0) {
+        charIndex = lcd.print(calRoutine == CAL_PITCH_X ? "Slide travel not dia" : "Loads axis 1mm first");
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Do not move it back");
+      } else if (calStep == 2) {
+        charIndex = lcd.print(measure == MEASURE_INCH ? "Thou: " : "Microns: ");
+        if (numpadIndex > 0) {
+          charIndex += printDeciMicrons(numpadRawToDu(getNumpadResult()), 5);
+        }
+      } else {
+        charIndex = lcd.print("New screw pitch");
+      }
+      printLcdSpaces(charIndex);
+      break;
+
+    case CAL_BACKLASH_Z:
+    case CAL_BACKLASH_X:
+      lcd.setCursor(0, 1);
+      if (calStep == 0) {
+        charIndex = lcd.print("Take up slack +2mm");
+        hint = "ON move, + again";
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Zero the indicator");
+        hint = "+ more, ON when set";
+      } else if (calStep == 2) {
+        charIndex = lcd.print("Back off ");
+        charIndex += printDeciMicrons(stepsToDu(a, abs(calRefPos - a->pos)), 5);
+        hint = "<> nudge, ON if mvd";
+      } else {
+        charIndex = printDeciMicrons(a->backlashDu, 5);
+        charIndex += lcd.print(" > ");
+        charIndex += printDeciMicrons(calValue, 5);
+        hint = "- redo, ON save";
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      if (calStep == 2) {
+        // The nudge size decides the resolution of the whole measurement, so it has to be visible
+        // and changeable here rather than assumed from whatever the main screen was left on.
+        charIndex = lcd.print("STEP key: ");
+        charIndex += printDeciMicrons(moveStep, 5);
+        charIndex += lcd.print(measure == MEASURE_INCH ? "\"" : "mm");
+      }
+      else if (calStep == 3) charIndex = lcd.print("New backlash");
+      else charIndex = 0;
+      printLcdSpaces(charIndex);
+      break;
+
+    case CAL_DIR_Z:
+    case CAL_DIR_X:
+      lcd.setCursor(0, 1);
+      if (!calDirMoved) {
+        charIndex = lcd.print("Test move +5mm");
+        hint = "ON to move";
+      } else {
+        charIndex = lcd.print(calRoutine == CAL_DIR_Z ? "To the tailstock?" : "Away from you?");
+        hint = "ON yes,< no,+ again";
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      charIndex = lcd.print(a->invertStepper ? "Now inverted" : "Now normal");
+      printLcdSpaces(charIndex);
+      break;
+
+    case CAL_TRAVEL_Z:
+    case CAL_TRAVEL_X:
+      lcd.setCursor(0, 1);
+      if (calStep == 0) {
+        charIndex = lcd.print("Jog to one end");
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Span ");
+        charIndex += printDeciMicrons(stepsToDu(a, abs(a->pos - calRefPos)), 5);
+      } else {
+        charIndex = lcd.print(a->maxTravelMm);
+        charIndex += lcd.print("mm > ");
+        charIndex += lcd.print(calValue);
+        charIndex += lcd.print("mm");
+      }
+      hint = calStep == 2 ? "- redo, ON save" : (calRoutine == CAL_TRAVEL_Z ? "<> jog, ON mark" : "^v jog, ON mark");
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      if (calStep == 1) charIndex = lcd.print("Now jog to other end");
+      else if (calStep == 2) charIndex = lcd.print("New max travel");
+      else {
+        // Tapping an arrow moves one of these, so show the size while creeping up on a hard stop.
+        charIndex = lcd.print("STEP key: ");
+        charIndex += printDeciMicrons(moveStep, 5);
+        charIndex += lcd.print(measure == MEASURE_INCH ? "\"" : "mm");
+      }
+      printLcdSpaces(charIndex);
+      break;
+
+    case CAL_SPEED_Z:
+    case CAL_SPEED_X:
+      lcd.setCursor(0, 1);
+      if (calStep == 0) {
+        charIndex = lcd.print("Ramp from ");
+        charIndex += lcd.print(a->speedManualMove);
+        hint = "ON to start";
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Try ");
+        charIndex += lcd.print(calValue);
+        charIndex += lcd.print(" steps/s");
+        hint = "ON up,+ same,< stall";
+      } else {
+        charIndex = lcd.print(calSaved);
+        charIndex += lcd.print(" > ");
+        charIndex += lcd.print(calValue);
+        hint = "- redo, ON save";
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      if (calStep == 1) charIndex = lcd.print("20mm strokes");
+      else if (calStep == 2) charIndex = lcd.print("80% of last good");
+      else charIndex = 0;
+      printLcdSpaces(charIndex);
+      break;
+
+    case CAL_ENC_PPR: {
+      long counts = abs(spindlePos - calRefSpindle);
+      lcd.setCursor(0, 1);
+      if (calStep == 0) {
+        charIndex = lcd.print("Turn ");
+        charIndex += lcd.print(CAL_REVS[calParamIndex]);
+        charIndex += lcd.print(" revolutions");
+        hint = "<> revs, ON start";
+      } else if (calStep == 1) {
+        charIndex = lcd.print("Counted ");
+        charIndex += lcd.print(counts);
+        hint = "ON when done";
+      } else {
+        charIndex = lcd.print(encoderPpr);
+        charIndex += lcd.print(" > ");
+        charIndex += lcd.print(calValue);
+        hint = "- redo, ON save";
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      if (calStep == 0) {
+        charIndex = lcd.print("Mark the chuck first");
+      } else if (calStep == 1) {
+        charIndex = lcd.print("PPR so far ");
+        charIndex += lcd.print(long(round(counts / (2.0 * CAL_REVS[calParamIndex]))));
+      } else {
+        charIndex = lcd.print("New encoder PPR");
+      }
+      printLcdSpaces(charIndex);
+      break;
+    }
+
+    case CAL_ENC_DIR:
+      lcd.setCursor(0, 1);
+      charIndex = lcd.print("Turn spindle fwd");
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      charIndex = lcd.print(spindlePos - calRefSpindle);
+      charIndex += lcd.print(encoderInvert ? " inverted" : " normal");
+      printLcdSpaces(charIndex);
+      hint = "Rising? ON. Else <";
+      break;
+
+    case CAL_ENC_SIGNAL:
+      lcd.setCursor(0, 1);
+      charIndex = lcd.print("Ang ");
+      charIndex += lcd.print(spindleModulo(spindlePos) * 360 / ENCODER_STEPS_FLOAT, 1);
+      charIndex += lcd.print(" Rpm ");
+      charIndex += lcd.print(getApproxRpm());
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      charIndex = lcd.print("Flips ");
+      charIndex += lcd.print(encoderReversals);
+      charIndex += lcd.print(" Filt ");
+      charIndex += lcd.print(encoderFilter);
+      printLcdSpaces(charIndex);
+      hint = "< reset, OFF exit";
+      break;
+
+    case CAL_INPUTS:
+      lcd.setCursor(0, 1);
+      charIndex = lcd.print("Key ");
+      if (calLastKeyCode < 0) {
+        charIndex += lcd.print("none yet");
+      } else {
+        charIndex += lcd.print(calLastKeyCode);
+        charIndex += lcd.print(calLastKeyPress ? " down" : " up");
+      }
+      printLcdSpaces(charIndex);
+      lcd.setCursor(0, 2);
+      // The joystick pins only get pinMode()d when joystickUse is set. Reading them otherwise
+      // returns whatever a floating input picks up, which would look like a live but erratic
+      // stick and send you chasing wiring faults that aren't there.
+      if (joystickUse) {
+        charIndex = lcd.print("Joystick ");
+        for (int i = 0; i < 6; i++) {
+          charIndex += lcd.print(DREAD(joystickPin(i)) == LOW ? "1" : "0");
+        }
+      } else {
+        charIndex = lcd.print("Joystick disabled");
+      }
+      printLcdSpaces(charIndex);
+      hint = "Hold OFF 1s to exit";
+      break;
+  }
+
+  lcd.setCursor(0, 3);
+  charIndex = splashActive() ? lcd.print(splashBuf) : lcd.print(hint);
+  printLcdSpaces(charIndex);
+}
+
 void processKeypadEvent() {
   int event = 0;
   if (serialKeycode != 0) {

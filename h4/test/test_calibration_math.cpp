@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include "../calibration_math.h"
+#include "../settings_table.h"
 #include "../pass_math.h"
 
 static int checks = 0;
@@ -49,6 +50,16 @@ static void expectF(const char* what, double got, double want, double tol) {
   }
 }
 
+// Whether the item carrying this suffix in this section stores itself under the expected key.
+static bool keyIs(int section, const char* suffix, const char* want) {
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (SETTINGS[i].section != section || strcmp(SETTINGS[i].prefKey, suffix) != 0) continue;
+    char buf[16];
+    settingKeyName(i, buf);
+    return strcmp(buf, want) == 0;
+  }
+  return false; // no such item, which is itself a failure worth reporting
+}
 
 // A representative Z axis: 2mm lead screw, 800 steps/rev, so one step is 25 deci-microns.
 static const float Z_PITCH = 20000.0f;
@@ -285,6 +296,181 @@ static void testBigDroLayout() {
   expectL("oversized value clamps to column 1", calBigDroStartCol(numCols, 19), 1);
 }
 
+static void testSettingsTable() {
+  group("settings table");
+  expectL("item count", SETTINGS_COUNT, 63);
+  expectL("section count", (int)SECTION_COUNT, 9);
+
+  // Navigating a section is a first index and a count, which only works if a section's items
+  // are one unbroken run of the table.
+  bool contiguous = true;
+  bool allPopulated = true;
+  int covered = 0;
+  for (int s = 0; s < SECTION_COUNT; s++) {
+    int first = settingSectionFirst(s);
+    int count = settingSectionCount(s);
+    if (first < 0 || count < 1) { allPopulated = false; continue; }
+    covered += count;
+    for (int i = first; i < first + count; i++) {
+      if (i >= SETTINGS_COUNT || SETTINGS[i].section != s) contiguous = false;
+    }
+  }
+  expectB("every section has items", allPopulated, true);
+  expectB("each section is one unbroken run", contiguous, true);
+  expectL("sections cover every item exactly once", covered, SETTINGS_COUNT);
+
+  // A per-axis item has to say which axis, and a global one must not claim an axis - the axis
+  // used to be inferred from the index being odd or even, which grouping by section broke.
+  bool axisConsistent = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    bool named = SETTINGS[i].axis != SAX_NONE;
+    if (named != settingIsAxis(i)) axisConsistent = false;
+  }
+  expectB("axis field agrees with the kind", axisConsistent, true);
+
+  // Units. A toggle and the calibration action have nothing to measure; a distance follows the
+  // metric/inch setting, so its unit cannot be a fixed string in the table.
+  bool unitsPlaced = true;
+  bool unitsFit = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    const char* u = SETTINGS[i].unit;
+    if ((settingIsToggle(i) || settingIsAction(i) || settingUsesDu(i)) && u != 0) unitsPlaced = false;
+    if (u != 0 && (strlen(u) > 8 || u[0] == 0 || u[0] == ' ')) unitsFit = false;
+  }
+  expectB("only measurable items carry a unit", unitsPlaced, true);
+  expectB("units are short enough for the LCD", unitsFit, true);
+
+  // Every plain number should say what it is counting. The WiFi PIN is the one real exception:
+  // it is a code, not a quantity.
+  int unitless = 0;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsToggle(i) || settingIsAction(i) || settingUsesDu(i)) continue;
+    if (SETTINGS[i].unit == 0) unitless++;
+  }
+  expectL("only the PIN is a number without a unit", unitless, 1);
+
+  // A unit named in the label as well as the field would print twice - "Max travel mm ... 300 mm".
+  bool labelsUnitFree = true;
+  const char* trailing[] = {" mm", " ms", " us", " s", " counts", " steps", " teeth"};
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    const char* label = SETTINGS[i].label;
+    size_t n = strlen(label);
+    for (int t = 0; t < 7; t++) {
+      size_t m = strlen(trailing[t]);
+      if (n >= m && strcmp(label + n - m, trailing[t]) == 0) labelsUnitFree = false;
+    }
+  }
+  expectB("no label repeats its own unit", labelsUnitFree, true);
+
+  bool labelsSane = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    const char* label = SETTINGS[i].label;
+    if (label == 0 || label[0] == 0 || label[0] == ' ') labelsSane = false;
+    if ((int)strlen(label) > 20) labelsSane = false;
+  }
+  expectB("labels are present and fit the screen", labelsSane, true);
+
+  bool sectionNamesFit = true;
+  for (int s = 0; s < SECTION_COUNT; s++) {
+    if (SECTION_NAMES[s] == 0 || strlen(SECTION_NAMES[s]) == 0) sectionNamesFit = false;
+    if (strlen(SECTION_NAMES[s]) > 18) sectionNamesFit = false; // room for the cursor
+  }
+  expectB("section names fit beside the cursor", sectionNamesFit, true);
+
+  // A toggle shows its own wording, so it needs both halves or neither.
+  bool togglesLabelled = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    bool both = SETTINGS[i].onLabel != 0 && SETTINGS[i].offLabel != 0;
+    bool neither = SETTINGS[i].onLabel == 0 && SETTINGS[i].offLabel == 0;
+    if (!both && !neither) togglesLabelled = false;
+    if (!settingIsToggle(i) && both) togglesLabelled = false;
+  }
+  expectB("toggle wording is complete", togglesLabelled, true);
+
+  int actionCount = 0;
+  for (int i = 0; i < SETTINGS_COUNT; i++) if (settingIsAction(i)) actionCount++;
+  expectL("there is exactly one action item", actionCount, 1);
+
+  bool kindsExclusive = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingUsesDu(i) && (settingIsToggle(i) || settingIsAction(i))) kindsExclusive = false;
+  }
+  expectB("kinds are mutually exclusive", kindsExclusive, true);
+
+  bool keysPresent = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    bool hasKey = SETTINGS[i].prefKey != 0 && SETTINGS[i].prefKey[0] != 0;
+    if (hasKey == settingIsAction(i)) keysPresent = false;
+  }
+  expectB("storable items have a key, the action has none", keysPresent, true);
+
+  // Every per-axis item must resolve to a letter, or its stored key collides with the same suffix
+  // on another axis. This is what index-parity derivation silently got wrong for A1, which has no
+  // parity that could ever have produced 'C'.
+  bool lettersPresent = true;
+  bool lettersKnown = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    char letter = settingAxisLetter(i);
+    if (settingIsAxis(i) != (letter != 0)) lettersPresent = false;
+    if (letter != 0 && letter != 'Z' && letter != 'X' && letter != 'C') lettersKnown = false;
+  }
+  expectB("axis items have a letter, globals have none", lettersPresent, true);
+  expectB("letters are only Z, X or C", lettersKnown, true);
+
+  bool a1Lettered = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (SETTINGS[i].axis == SAX_A1 && settingAxisLetter(i) != 'C') a1Lettered = false;
+  }
+  expectB("A1 items are reachable as C", a1Lettered, true);
+
+  // Two items sharing a storage key would silently overwrite each other. Per-axis items are
+  // qualified by the axis letter, which is how three axes reuse the same suffixes. Built with the
+  // firmware's own settingKeyName() - restating the composition here is what let the parity bug
+  // live behind a passing uniqueness check.
+  char qualified[80][20];
+  int count = 0;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsAction(i)) continue;
+    settingKeyName(i, qualified[count]);
+    count++;
+  }
+  bool keysUnique = true;
+  bool keysFit = true;
+  for (int i = 0; i < count; i++) {
+    if (strlen(qualified[i]) > 15) keysFit = false; // NVS key limit
+    for (int j = i + 1; j < count; j++) {
+      if (strcmp(qualified[i], qualified[j]) == 0) keysUnique = false;
+    }
+  }
+  expectB("no two items share a storage key", keysUnique, true);
+  expectB("storage keys fit the NVS key limit", keysFit, true);
+
+  // Spot-check the actual strings. The properties above would all still hold if the letters were
+  // simply shuffled, so pin down what a few keys really spell - these are the names a saved backup
+  // contains and what a restore has to match.
+  // The WiFi PIN doubles as the WPA2 password, where too short means an open network rather than
+  // an error, so the boundaries are the whole safety mechanism.
+  expectB("8 digits is accepted", calWifiPinValid(13572468), true);
+  expectB("the smallest 8-digit PIN", calWifiPinValid(10000000), true);
+  expectB("the largest 8-digit PIN", calWifiPinValid(99999999), true);
+  expectB("7 digits is refused", calWifiPinValid(9999999), false);
+  expectB("9 digits is refused", calWifiPinValid(100000000), false);
+  expectB("a leading zero would be lost", calWifiPinValid(1234567), false);
+  expectB("zero is refused", calWifiPinValid(0), false);
+  expectB("negative is refused", calWifiPinValid(-13572468), false);
+
+  expectB("Z screw pitch is Zscr", keyIs(SEC_Z, "scr", "Zscr"), true);
+  expectB("X screw pitch is Xscr", keyIs(SEC_X, "scr", "Xscr"), true);
+  expectB("A1 screw pitch is Cscr", keyIs(SEC_A1, "scr", "Cscr"), true);
+  expectB("a global keeps its bare suffix", keyIs(SEC_ENCODER, "eppr", "eppr"), true);
+
+  // Calibration is the last thing in the menu, as the only item that opens a screen.
+  expectB("the last item is the calibration action", settingIsAction(SETTINGS_COUNT - 1), true);
+  // Preferences is what the directory opens on, so it has to be the first section.
+  expectL("preferences comes first", (int)SEC_PREFS, 0);
+  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 9);
+}
+
 static void testSlotting() {
   group("slotting");
   // Four passes from X=0 to X=-2mm of depth: every stroke cuts, and the last lands on the stop.
@@ -440,6 +626,7 @@ int main() {
   testSpindleModulo();
   testRpmAccumulator();
   testBigDroLayout();
+  testSettingsTable();
   testSlotting();
   testPassDepth();
   testPassSequencing();

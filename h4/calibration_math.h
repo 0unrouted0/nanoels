@@ -188,6 +188,17 @@ inline long calNumpadRawToDu(bool inchMode, long raw) {
 }
 
 // ---------------------------------------------------------------------------
+// WiFi
+// ---------------------------------------------------------------------------
+
+// The access point password is stored as a number, because that is all the settings table holds.
+// WPA2 needs at least 8 characters, and softAP() quietly opens the network rather than failing if
+// it gets fewer - so the PIN has to be exactly 8 digits, which means no leading zero to lose.
+inline bool calWifiPinValid(long pin) {
+  return pin >= 10000000L && pin <= 99999999L;
+}
+
+// ---------------------------------------------------------------------------
 // Large position display layout
 // ---------------------------------------------------------------------------
 
