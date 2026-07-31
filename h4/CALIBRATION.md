@@ -124,27 +124,60 @@ A live health check on the spindle encoder. This is the screen to come back to a
    ```
    Encoder signal
    Ang 214.5 Rpm 0
-   Flips 0 Filt 200
+   Coh 100 Lo 100 Flp 0
    < reset, OFF exit
    ```
-2. **`Flips` must stay at 0**, whether the spindle is stopped or you're turning it by hand. It counts only *spurious* reversals — a direction change after a long run is you turning the spindle back, which is normal and isn't counted; a reversal after barely any movement is the counter dithering on a transition, which is noise. Anything above zero means noise is reaching the counter.
-3. Turn the spindle slowly by hand. `Ang` should sweep smoothly through 0–360° and back to 0 without jumping. Run the spindle under power and check `Rpm` reads steadily rather than wandering.
-4. Press the left arrow to reset the counters and watch again.
-5. Press stop to exit.
+2. **`Coh` is coherence, as a percentage, and it should read 100 whenever the spindle is turning.**
 
-**If `Flips` climbs, or the carriage twitches while you hand-turn the spindle**, in order of what to try:
+   It compares how far the counter *travelled* against how far it actually *moved*, over a 20ms window. A cleanly rotating encoder travels exactly as far as it moves, so the two match. An encoder dithering on a quadrature transition racks up travel that never becomes movement, and coherence falls.
 
-- Raise `ENCODER_FILTER` at the top of the sketch, but check the ceiling first — it depends on your encoder and gearing, not just the filter value:
+   This is worth watching precisely because the RPM readout cannot show it: RPM is accumulated signed, so a counter jittering back and forth cancels itself out and reads as a *stopped* spindle rather than a noisy one.
+
+3. **`Lo` is the lowest coherence seen since the last reset.** This is the number that matters. Noise arrives in bursts you won't be standing at the screen for, so leave the machine running, go and cut something, then come back and read `Lo`. Windows below 30 rpm aren't recorded — starting, stopping and hand-turning all produce low coherence honestly.
+4. **`Flp` counts spurious reversals** — a direction change after barely any movement, which is the counter dithering rather than you turning the spindle back. It should stay at 0.
+5. Turn the spindle slowly by hand. `Ang` should sweep smoothly through 0–360° and back to 0 without jumping. Run the spindle under power and check `Rpm` reads steadily rather than wandering.
+6. Press the left arrow to reset the counters and watch again.
+7. Press stop to exit.
+
+The web page's derived-figures panel shows the same numbers plus `dirtyWindows`, a running count of windows that came in under 95%. That's the one to leave open on a phone through a whole job.
+
+### Reading the result
+
+| `Lo` | What it means |
+|---|---|
+| 100 | Clean. If threading is still wrong, the encoder is not the cause. |
+| 95–99 | Occasional dithering. Usually harmless, worth watching. |
+| 50–95 | Real noise reaching the counter. Fix it before trusting a thread. |
+| Near 0 with `Rpm` reading 0 | The counter is moving but going nowhere — classic dither, and the case that silently looks like a stopped spindle. |
+
+**If `Lo` falls or `Flp` climbs**, in order of what to try. The first four are causes; the last two are masks:
+
+- Route the encoder cable away from the stepper and VFD wiring rather than bundled with it. Coherence that tracks VFD frequency is coupling, not a bad encoder.
+- Make sure the encoder ground returns to the controller ground at a single point — a ground loop through the lathe frame injects noise no filter setting will fix.
+- Ground the cable shield at one end only.
+- Add a 1nF capacitor from each of the A and B lines to ground at the controller end.
+- Raise `Glitch filter`, but check the ceiling first — it depends on your encoder and gearing, not just the filter value:
 
   ```
   highest usable ENCODER rpm  =  2.4e9 / (ENCODER_PPR * ENCODER_FILTER)
   ```
 
   and a geared-up encoder spins faster than the spindle. At 1000 PPR with `ENCODER_FILTER = 200` that's 12,000 encoder rpm, or 6,000 at the spindle through a 1:2 belt. Raising it to 400 would halve that to 3,000 spindle rpm, which is inside a lathe's working range — so a value that was safe on a direct-driven 600 PPR encoder can silently start dropping pulses on a geared 1000 PPR one.
-- Raise `ENCODER_BACKLASH`, the dead-band that stops the carriage chasing small reversals. At 600 PPR, `16` is 4.8°. This treats the symptom rather than the cause, and the cost is that a genuine spindle reversal is ignored for that many counts — but it's the fastest way to stop a twitching carriage while you chase the wiring.
-- Route the encoder cable away from the stepper and VFD wiring rather than bundled with it.
-- Add a 1nF capacitor from each of the A and B lines to ground at the controller end.
-- Make sure the encoder ground returns to the controller ground at a single point — a ground loop through the lathe frame injects noise no filter setting will fix.
+- Switch `Dead-band shape` to `symmetric` — see below.
+
+### Dead-band shape
+
+The dead-band is how far the count has to move before the axes follow it. Its **shape** decides whether that applies in both directions:
+
+- **`one-way`** (the default, and how the firmware has always behaved) holds the follower in `[count, count + band]`. It snaps forward the instant the count rises and lags only on the way back. That models mechanical backlash in a lead screw, which is what the setting is named after.
+
+  It is **not** a noise filter and does not act as one. A spurious count in the rising direction is adopted immediately, and the offset it leaves is permanent — the follower simply waits at the higher value for real movement to catch up. Blips in one direction therefore accumulate across a pass, which looks like a thread drifting rather than a carriage twitching.
+
+- **`symmetric`** holds the follower in `[count - band, count + band]`, moving only once the count pushes past the band on either side. Both directions are filtered equally, so a blip forward and back nets to nothing.
+
+  The price is that the rising direction now lags by up to `Dead-band` counts where it previously did not. On a machine with a clean encoder that is a cost with no benefit — check `Lo` first.
+
+Raising `Dead-band` treats the symptom rather than the cause either way, and the cost is that a genuine spindle reversal is ignored for that many counts. At 600 PPR, `16` counts is 4.8°. It is still the fastest way to stop a twitching carriage while you chase the wiring.
 
 ---
 

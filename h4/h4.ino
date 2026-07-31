@@ -8,6 +8,7 @@
 #include "calibration_math.h"
 #include "settings_table.h"
 #include "pass_math.h"
+#include "encoder_health.h"
 
 // Runtime copies of the machine_config.h defaults that the settings menu can change. The
 // constants there are only the starting point for a device that has never been configured.
@@ -102,6 +103,7 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define PREF_X_DIAMETER "xdd"
 #define PREF_ENCODER_INVERT "einv"
 #define PREF_ENCODER_BACKLASH "ebl"
+#define PREF_ENCODER_SYMMETRIC "ebls"
 #define PREF_ENCODER_SPINDLE_TEETH "est"
 #define PREF_ENCODER_PULLEY_TEETH "ept"
 #define PREF_ENCODER_DIVIDER "ediv"
@@ -379,6 +381,8 @@ unsigned long spindleEncTimeAtIndex0 = 0; // micros() when spindleEncTimeIndex w
 int spindleEncTimeIndex = 0; // counter going between 0 and RPM_BULK - 1
 bool encoderInvert = false; // Reverses the counting direction of the spindle encoder in software
 int encoderBacklash = ENCODER_BACKLASH; // Dead-band in counts, see the constant for what it does
+bool encoderSymmetric = ENCODER_SYMMETRIC; // Whether the dead-band filters both directions or one
+EncHealth encHealth; // Signal-quality window, shown on the encoder calibration screen
 int encoderSpindleTeeth = ENCODER_SPINDLE_TEETH; // Spindle pulley teeth, for a belt-driven encoder
 int encoderPulleyTeeth = ENCODER_PULLEY_TEETH; // Encoder pulley teeth
 int encoderDivider = ENCODER_DIVIDER; // Counts folded into one step to steady a fluttering encoder
@@ -2092,6 +2096,7 @@ void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
 
 // Attaching interrupt on core 0 to have more time on core 1 where axes are moved.
 void taskAttachInterrupts(void *param) {
+  encHealthReset(&encHealth, micros());
   startPulseCounter(PCNT_UNIT_0, ENC_A, ENC_B);
   if (pulse1Use) attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
   if (pulse2Use) attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
@@ -2171,6 +2176,7 @@ void setup() {
   encoderPulleyTeeth = pref.getLong(PREF_ENCODER_PULLEY_TEETH, ENCODER_PULLEY_TEETH);
   encoderDivider = pref.getLong(PREF_ENCODER_DIVIDER, ENCODER_DIVIDER);
   encoderBacklash = pref.getLong(PREF_ENCODER_BACKLASH, ENCODER_BACKLASH);
+  encoderSymmetric = pref.getBool(PREF_ENCODER_SYMMETRIC, ENCODER_SYMMETRIC);
   encoderFilter = pref.getLong("eflt", ENCODER_FILTER);
   safeDistanceDu = pref.getLong("safe", SAFE_DISTANCE_DU);
   pulse1Use = pref.getBool("p1u", PULSE_1_USE);
@@ -3245,6 +3251,7 @@ long settingsReadValue(int index) {
   if (!strcmp(k, "ept")) return encoderPulleyTeeth;
   if (!strcmp(k, "ediv")) return encoderDivider;
   if (!strcmp(k, "ebl")) return encoderBacklash;
+  if (!strcmp(k, "ebls")) return encoderSymmetric ? 1 : 0;
   if (!strcmp(k, "eflt")) return encoderFilter;
   if (!strcmp(k, "spp")) return springPasses;
   if (!strcmp(k, "pck")) return peckDepthDu;
@@ -3347,6 +3354,12 @@ const char* settingsWriteValue(int index, long value) {
   } else if (!strcmp(k, "ebl")) {
     if (value < 0 || value > 1000) return "Must be 0 to 1000";
     encoderBacklash = value;
+  } else if (!strcmp(k, "ebls")) {
+    encoderSymmetric = value != 0;
+    // The two shapes hold the follower in different bands - [pos, pos+band] against
+    // [pos-band, pos+band] - so switching leaves it outside the new one by up to a full band.
+    // Re-centre now rather than letting the first count of the next cut take up the difference.
+    spindlePosAvg = spindlePos;
   } else if (!strcmp(k, "eflt")) {
     // 1023 is the counter's own ceiling. The RPM this allows depends on PPR and gearing -
     // machine_config.h carries the formula.
@@ -3663,6 +3676,14 @@ void handleDerivedJson() {
   out += ",\"maxSpindleRpm\":" + String(calMaxSpindleRpm(encoderPpr, encoderFilter,
                                                          encoderSpindleTeeth, encoderPulleyTeeth));
   out += ",\"divider\":" + String(encoderDivider);
+  // The same signal-quality figures the calibration screen shows, plus the dirty-window count
+  // there is no room for on the LCD. Worth having here because this page can be left open on a
+  // phone through a whole job, which is when a burst of noise is most likely to be caught.
+  out += ",\"coherence\":" + String(encHealth.coherence);
+  out += ",\"worstCoherence\":" + String(encHealth.worstCoherence);
+  out += ",\"dirtyWindows\":" + String(encHealth.dirtyWindows);
+  out += ",\"flips\":" + String(encoderReversals);
+  out += ",\"symmetric\":" + String(encoderSymmetric ? 1 : 0);
   out += "}}";
   webServer.send(200, "application/json", out);
 }
@@ -4259,6 +4280,7 @@ void calStartRoutine(int r) {
     calValue = a->speedManualMove;
   } else if (r == CAL_ENC_SIGNAL) {
     encoderReversals = 0;
+    encHealthReset(&encHealth, micros());
   }
 }
 
@@ -4572,6 +4594,7 @@ void calAdjust(int dir) {
     case CAL_ENC_SIGNAL:
       if (dir < 0) {
         encoderReversals = 0;
+        encHealthReset(&encHealth, micros());
         calRefSpindle = spindlePos;
       }
       break;
@@ -4660,7 +4683,11 @@ long getCalHash() {
   if (splashActive()) h += splashId * 7919L;
   switch (calRoutine) {
     case CAL_ENC_SIGNAL:
-      h += spindlePos * 3L + encoderReversals * 11L + getApproxRpm() * 13L;
+      // Coherence has to be in here in its own right: a spindle sitting still with a noisy
+      // encoder moves the figure while spindlePos stays put, which is exactly the case the
+      // screen exists to show.
+      h += spindlePos * 3L + encoderReversals * 11L + getApproxRpm() * 13L
+          + encHealth.coherence * 17L + encHealth.worstCoherence * 19L;
       break;
     case CAL_ENC_PPR:
     case CAL_ENC_DIR:
@@ -4909,10 +4936,16 @@ void updateCalDisplay() {
       charIndex += lcd.print(getApproxRpm());
       printLcdSpaces(charIndex);
       lcd.setCursor(0, 2);
-      charIndex = lcd.print("Flips ");
+      // Coherence now and the worst seen since the reset, then the spurious flip count. A clean
+      // encoder sits at 100 while the spindle turns; the low-water mark is the number that
+      // matters, because noise comes in bursts you will not be looking at the screen for. The
+      // filter value lives one menu away - these three are what you watch while changing it.
+      charIndex = lcd.print("Coh ");
+      charIndex += encHealth.coherence < 0 ? lcd.print("--") : lcd.print(encHealth.coherence);
+      charIndex += lcd.print(" Lo ");
+      charIndex += encHealth.worstCoherence < 0 ? lcd.print("--") : lcd.print(encHealth.worstCoherence);
+      charIndex += lcd.print(" Flp ");
       charIndex += lcd.print(encoderReversals);
-      charIndex += lcd.print(" Filt ");
-      charIndex += lcd.print(encoderFilter);
       printLcdSpaces(charIndex);
       hint = "< reset, OFF exit";
       break;
@@ -5897,7 +5930,17 @@ void processSpindleCounter() {
   if (microsNow - spindleEncTime > 50000) {
     spindleEncTimeIndex = 0;
     spindleEncTimeAtIndex0 = microsNow;
+    // Same reasoning for the health window, so it has to be dropped before this count goes in
+    // rather than after: counts from before the pause scored against the whole elapsed time
+    // read as a nearly stationary spindle, for movement that had already finished.
+    encHealthRestartWindow(&encHealth, microsNow);
   }
+  // Signal quality, measured on the same counts that drive the axes - after the divider, so it
+  // reports what the machine actually follows rather than what the encoder emits. Always on:
+  // the windows worth seeing are the ones that happen mid-cut, not while you stand at the
+  // calibration screen. Two adds and a compare per count, a division every 20ms.
+  encHealthAdd(&encHealth, delta, microsNow, ENCODER_HEALTH_WINDOW_US,
+               encRateFromRpm(ENCODER_STEPS_INT, ENCODER_HEALTH_BUSY_RPM), ENCODER_COHERENCE_FLOOR);
   // The large display's info strip and the encoder signal calibration screen both read RPM,
   // so the bulk timing has to keep running for them as well as for the tacho readout.
   if (showTacho || mode == MODE_GCODE || showBigDro || (inCal && calRoutine == CAL_ENC_SIGNAL)) {
@@ -5920,11 +5963,7 @@ void processSpindleCounter() {
   } else if (spindlePosGlobal < 0) {
     spindlePosGlobal += ENCODER_STEPS_INT;
   }
-  if (spindlePos > spindlePosAvg) {
-    spindlePosAvg = spindlePos;
-  } else if (spindlePos < spindlePosAvg - encoderBacklash) {
-    spindlePosAvg = spindlePos + encoderBacklash;
-  }
+  spindlePosAvg = encFollowDeadband(spindlePos, spindlePosAvg, encoderBacklash, encoderSymmetric);
   spindleEncTime = microsNow;
 
   if (spindlePosSync != 0) {

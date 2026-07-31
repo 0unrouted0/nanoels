@@ -106,6 +106,28 @@ const int ENCODER_BACKLASH = 8;
 // encoder allows 20000, so PPR and gearing both have to be accounted for before raising it.
 const int ENCODER_FILTER = 200; // 2.5us
 
+// Dead-band shape. false is the original behaviour: the axes follow a rising count immediately
+// and lag only on the way back, which suits a machine whose encoder is clean and whose lead
+// screw has real backlash. true filters both directions equally, which is what you want if the
+// encoder itself is noisy - at the cost of the rising direction now lagging too. Check the
+// coherence figure on the encoder signal calibration screen before reaching for it.
+const bool ENCODER_SYMMETRIC = false;
+
+// Window the encoder signal-quality figures are measured over. Long enough to average out the
+// gaps between counts at low rpm, short enough that a burst of noise still shows up as its own
+// window rather than being diluted by good movement either side of it.
+const unsigned long ENCODER_HEALTH_WINDOW_US = 20000; // 20ms
+
+// Below this spindle rpm the coherence figure is still shown but no longer recorded. Starting,
+// stopping and hand-turning all produce low coherence honestly, and counting those against the
+// encoder would bury the windows that are genuinely noisy.
+const int ENCODER_HEALTH_BUSY_RPM = 30;
+
+// Coherence at or above this is treated as a clean window. A healthy encoder sits at 100 while
+// the spindle turns steadily; anything that spends time below this is worth investigating before
+// masking it in software.
+const int ENCODER_COHERENCE_FLOOR = 95;
+
 // ---------------------------------------------------------------------------
 // Main lead screw (Z)
 // ---------------------------------------------------------------------------

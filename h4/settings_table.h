@@ -134,6 +134,9 @@ const SettingDesc SETTINGS[] = {
   {"Encoder pulley",       SETTING_GLOBAL_NUM,  "ept",  SEC_ENCODER, SAX_NONE, 0, 0, "teeth"},
   {"Divider",              SETTING_GLOBAL_NUM,  "ediv", SEC_ENCODER, SAX_NONE, 0, 0, "to 1"},
   {"Dead-band",            SETTING_GLOBAL_NUM,  "ebl",  SEC_ENCODER, SAX_NONE, 0, 0, "counts"},
+  // One-way is how the firmware has always behaved and models lead screw backlash. Symmetric
+  // filters both directions equally, which is the one to reach for if the encoder is the problem.
+  {"Dead-band shape",      SETTING_GLOBAL_BOOL, "ebls", SEC_ENCODER, SAX_NONE, "symmetric", "one-way", 0},
   {"Glitch filter",        SETTING_GLOBAL_NUM,  "eflt", SEC_ENCODER, SAX_NONE, 0, 0, "cycles"},
 
   // -- Handwheels ---------------------------------------------------------

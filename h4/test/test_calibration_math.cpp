@@ -8,6 +8,7 @@
 #include "../calibration_math.h"
 #include "../settings_table.h"
 #include "../pass_math.h"
+#include "../encoder_health.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -348,7 +349,7 @@ static void testDerivedFigures() {
 
 static void testSettingsTable() {
   group("settings table");
-  expectL("item count", SETTINGS_COUNT, 63);
+  expectL("item count", SETTINGS_COUNT, 64);
   expectL("section count", (int)SECTION_COUNT, 9);
 
   // Navigating a section is a first index and a count, which only works if a section's items
@@ -667,6 +668,136 @@ static void testPeck() {
   expectL("exactly at the start stays put", peckRetractPos(500, 500, 0, true), 0);
 }
 
+// The dead-band shapes, and the signal-quality window that tells you which one you need.
+static void testEncoderHealth() {
+  group("encoder dead-band");
+  // One-way: the follower snaps forward with the count and lags only on the way back. This is
+  // the long-standing behaviour, so it is pinned here rather than merely described.
+  expectL("one-way follows a rising count exactly", encFollowDeadband(1000, 990, 8, false), 1000);
+  expectL("one-way holds inside the band falling", encFollowDeadband(995, 1000, 8, false), 1000);
+  expectL("one-way lags once past the band", encFollowDeadband(980, 1000, 8, false), 988);
+  // The reason the shape matters: a single spurious count forward is adopted immediately and the
+  // follower then sits ahead of the truth, waiting for real movement to catch up. Two blips in
+  // the same direction leave twice the error, which is how it accumulates over a pass.
+  long avg = 1000;
+  avg = encFollowDeadband(1001, avg, 8, false); // noise count forward
+  avg = encFollowDeadband(1000, avg, 8, false); // and back to the truth
+  expectL("one-way keeps the offset a forward blip left", avg, 1001);
+  avg = encFollowDeadband(1001, avg, 8, false);
+  avg = encFollowDeadband(1000, avg, 8, false);
+  expectL("one-way blips accumulate", avg, 1001);
+
+  // Symmetric: the same blip is inside the band in both directions, so nothing moves at all.
+  avg = 1000;
+  avg = encFollowDeadband(1001, avg, 8, true);
+  avg = encFollowDeadband(1000, avg, 8, true);
+  expectL("symmetric absorbs a forward blip", avg, 1000);
+  expectL("symmetric holds inside the band rising", encFollowDeadband(1007, 1000, 8, true), 1000);
+  expectL("symmetric moves once past the band rising", encFollowDeadband(1009, 1000, 8, true), 1001);
+  expectL("symmetric holds inside the band falling", encFollowDeadband(993, 1000, 8, true), 1000);
+  expectL("symmetric moves once past the band falling", encFollowDeadband(991, 1000, 8, true), 999);
+  // A zero band has to be a straight pass-through in both shapes, or turning the dead-band off
+  // would quietly leave a one-count offset behind.
+  expectL("zero band passes through rising", encFollowDeadband(1005, 1000, 0, true), 1005);
+  expectL("zero band passes through falling", encFollowDeadband(995, 1000, 0, true), 995);
+  expectL("zero band passes through one-way", encFollowDeadband(995, 1000, 0, false), 995);
+
+  group("encoder signal quality");
+  EncHealth h;
+  encHealthReset(&h, 0);
+  expectL("no coherence before the first window", h.coherence, -1);
+  expectL("no low-water mark before the first window", h.worstCoherence, -1);
+
+  // 4000 counts/rev at 600 rpm is 40000 counts/sec: 800 counts in a 20ms window, one every 25us.
+  // A clean signal travels exactly as far as it moves.
+  const long busy = encRateFromRpm(4000, 30);
+  expectL("busy threshold in counts per second", busy, 2000);
+  unsigned long t = 0;
+  bool completed = false;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    completed = encHealthAdd(&h, 1, t, 20000, busy, 95);
+  }
+  expectB("a full window completes", completed, true);
+  expectL("clean rotation is fully coherent", h.coherence, 100);
+  expectL("clean rotation reports its rate", h.pathRate, 40000);
+  expectL("net rate matches path rate when clean", h.netRate, 40000);
+  expectL("a clean window is not counted dirty", h.dirtyWindows, 0);
+  expectL("low-water mark recorded once busy", h.worstCoherence, 100);
+
+  // Pure dither: the counter travels the same distance but arrives nowhere. This is the case the
+  // signed RPM figure the rest of the firmware uses cannot see, because the deltas cancel.
+  encHealthReset(&h, 0);
+  t = 0;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    encHealthAdd(&h, i % 2 == 0 ? 1 : -1, t, 20000, busy, 95);
+  }
+  expectL("dither is loud", h.pathRate, 40000);
+  expectL("dither goes nowhere", h.netRate, 0);
+  expectL("dither reads as no coherence", h.coherence, 0);
+  expectL("dither is counted dirty", h.dirtyWindows, 1);
+
+  // Real movement with noise on top: 800 counts of travel producing 600 counts of movement.
+  encHealthReset(&h, 0);
+  t = 0;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    encHealthAdd(&h, i % 8 == 7 ? -1 : 1, t, 20000, busy, 95);
+  }
+  expectL("noisy rotation is partly coherent", h.coherence, 75);
+  expectL("noisy rotation is counted dirty", h.dirtyWindows, 1);
+
+  // A spindle turning too slowly to judge: measured and shown, but kept out of the record, or
+  // every start and stop would peg the low-water mark at zero.
+  encHealthReset(&h, 0);
+  t = 0;
+  for (int i = 0; i < 20; i++) {
+    t += 1000; // one count per millisecond, 1000 counts/sec, well under the threshold
+    encHealthAdd(&h, i % 2 == 0 ? 1 : -1, t, 20000, busy, 95);
+  }
+  expectL("a slow window still reports coherence", h.coherence, 0);
+  expectL("a slow window is not counted dirty", h.dirtyWindows, 0);
+  expectL("a slow window leaves the low-water mark alone", h.worstCoherence, -1);
+
+  // The low-water mark has to survive the good windows that follow the bad one, or it would only
+  // ever show whatever happened most recently.
+  encHealthReset(&h, 0);
+  t = 0;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    encHealthAdd(&h, i % 8 == 7 ? -1 : 1, t, 20000, busy, 95);
+  }
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    encHealthAdd(&h, 1, t, 20000, busy, 95);
+  }
+  expectL("current coherence recovers", h.coherence, 100);
+  expectL("the low-water mark does not", h.worstCoherence, 75);
+
+  // micros() wraps every 71.6 minutes. Unsigned arithmetic has to carry the window across it,
+  // because a threading pass can easily straddle one.
+  encHealthReset(&h, 0xFFFFFF00UL);
+  t = 0xFFFFFF00UL;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    completed = encHealthAdd(&h, 1, t, 20000, busy, 95);
+  }
+  expectB("a window straddling the rollover completes", completed, true);
+  expectL("and measures the same rate", h.pathRate, 40000);
+
+  // Dropping a stale window must not disturb what has already been recorded.
+  encHealthReset(&h, 0);
+  t = 0;
+  for (int i = 0; i < 800; i++) {
+    t += 25;
+    encHealthAdd(&h, i % 8 == 7 ? -1 : 1, t, 20000, busy, 95);
+  }
+  encHealthRestartWindow(&h, t + 5000000UL);
+  expectL("restarting keeps the low-water mark", h.worstCoherence, 75);
+  expectL("restarting keeps the dirty count", h.dirtyWindows, 1);
+}
+
 int main() {
   printf("calibration_math.h\n==================\n");
   testGeometry();
@@ -683,6 +814,7 @@ int main() {
   testPassSequencing();
   testFlankInfeed();
   testPeck();
+  testEncoderHealth();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }
