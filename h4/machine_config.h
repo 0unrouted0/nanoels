@@ -189,6 +189,26 @@ const long STEP_TIME_MS = 500; // Time in milliseconds it should take to make 1 
 const long DELAY_BETWEEN_STEPS_MS = 80; // Time in milliseconds to wait between steps.
 
 // ---------------------------------------------------------------------------
+// WiFi and firmware updates
+// ---------------------------------------------------------------------------
+
+// The controller can bring up its own access point, so settings can be edited and new firmware
+// installed from a phone or laptop with no router involved. See WIFI.md.
+//
+// Off unless you turn it on, in Settings > WiFi & updates. While off there is no radio and no
+// extra task, and the controller behaves exactly as it did before this existed. The radio is only
+// started during setup(), so enabling it takes a restart.
+//
+// The network name is fixed. The password is an 8-digit PIN, because it is stored through the
+// settings table, which holds numbers - WPA2 needs at least 8 characters, so the settings menu
+// refuses anything that is not exactly 8 digits. CHANGE IT: anyone who can join the network can
+// reflash the machine.
+#define WIFI_SSID "NanoEls-H4"
+#define WIFI_CHANNEL 1
+const bool WIFI_ENABLED = false;
+const long WIFI_PIN_DEFAULT = 13572468;
+
+// ---------------------------------------------------------------------------
 // Keypad
 // ---------------------------------------------------------------------------
 

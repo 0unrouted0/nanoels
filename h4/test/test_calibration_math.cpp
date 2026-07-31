@@ -296,6 +296,56 @@ static void testBigDroLayout() {
   expectL("oversized value clamps to column 1", calBigDroStartCol(numCols, 19), 1);
 }
 
+static void testDerivedFigures() {
+  group("derived figures");
+  // Z: 2mm screw, 800 steps -> 25 deci-microns, exactly 2.5 microns, per step.
+  expectF("Z resolution in du", calStepResolutionDu(Z_PITCH, Z_STEPS), 25.0, 0.001);
+  expectF("Z steps per mm", calStepsPerMm(Z_PITCH, Z_STEPS), 400.0, 0.001);
+  // X through a 3:1 reduction resolves three times finer, and no longer divides evenly.
+  expectF("X resolution in du", calStepResolutionDu(20000.0f, 2400.0f), 8.3333, 0.001);
+  expectF("X steps per mm", calStepsPerMm(20000.0f, 2400.0f), 1200.0, 0.001);
+  // A finer screw resolves finer for the same motor.
+  expectF("1mm screw halves the step", calStepResolutionDu(10000.0f, 800.0f), 12.5, 0.001);
+  expectF("a zero motor cannot resolve", calStepResolutionDu(Z_PITCH, 0), 0.0, 0.0001);
+  expectF("a zero screw has no steps per mm", calStepsPerMm(0, Z_STEPS), 0.0, 0.0001);
+
+  // 2000 steps/s on the Z above is 50000 du/s, so 3,000,000 du (300mm) per minute.
+  expectL("max feed", calMaxFeedDuPerMin(2000, Z_PITCH, Z_STEPS), 3000000);
+  expectL("no motor, no feed", calMaxFeedDuPerMin(2000, Z_PITCH, 0), 0);
+
+  // The number that matters when threading: 300mm/min of Z at a 1mm pitch is 300 rpm, and a
+  // coarser pitch lowers the ceiling proportionally.
+  expectL("max rpm at 1mm pitch", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 10000), 300);
+  expectL("a 3mm pitch thirds it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 30000), 100);
+  expectL("a fine 0.5mm pitch doubles it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 5000), 600);
+  // Left-hand threads are the same speed problem as right-hand ones.
+  expectL("sign of the pitch is irrelevant", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, -30000), 100);
+  expectL("no pitch means no limit to report", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 0), 0);
+
+  // The worked example from the ENCODER_FILTER comment in machine_config.h.
+  expectL("1000 PPR at filter 200", calMaxEncoderRpm(1000, 200), 12000);
+  expectL("600 PPR allows more", calMaxEncoderRpm(600, 200), 20000);
+  expectL("a heavier filter allows less", calMaxEncoderRpm(1000, 400), 6000);
+  expectL("nonsense PPR reports nothing", calMaxEncoderRpm(0, 200), 0);
+  // Geared up 1:2 the encoder spins twice as fast, so the spindle hits the ceiling at half.
+  expectL("belted encoder halves the spindle ceiling",
+          calMaxSpindleRpm(1000, 200, 2, 1), 6000);
+  expectL("direct drive is unchanged", calMaxSpindleRpm(1000, 200, 1, 1), 12000);
+  expectL("geared down raises it", calMaxSpindleRpm(1000, 200, 1, 2), 24000);
+
+  // 1000 PPR read 4x is 4000 counts, so a shade under a tenth of a degree.
+  expectF("angular resolution", calAngularResolutionDeg(4000), 0.09, 0.0001);
+  expectF("a coarse encoder sees less", calAngularResolutionDeg(400), 0.9, 0.0001);
+  expectF("no counts, no resolution", calAngularResolutionDeg(0), 0.0, 0.0001);
+
+  // Stopping distance is the deceleration ramp measured in millimetres rather than steps.
+  long rampSteps = calDecelerateSteps(2000, 800, 25000);
+  expectL("stop distance follows the ramp",
+          calStopDistanceDu(2000, 800, 25000, Z_PITCH, Z_STEPS),
+          calRoundL(rampSteps * 25.0));
+  expectL("no motor, no distance", calStopDistanceDu(2000, 800, 25000, Z_PITCH, 0), 0);
+}
+
 static void testSettingsTable() {
   group("settings table");
   expectL("item count", SETTINGS_COUNT, 63);
@@ -626,6 +676,7 @@ int main() {
   testSpindleModulo();
   testRpmAccumulator();
   testBigDroLayout();
+  testDerivedFigures();
   testSettingsTable();
   testSlotting();
   testPassDepth();

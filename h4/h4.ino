@@ -3535,6 +3535,307 @@ long otaLcdHash = LCD_HASH_INITIAL;
 
 // Labels and error strings are ASCII and under our control, but one stray quote would produce a
 // document the page silently fails to parse, which is a miserable thing to debug over WiFi.
+String jsonEscape(const char* s) {
+  String out = "";
+  for (int i = 0; s[i] != 0; i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += c;
+    } else if (c >= 32) {
+      out += c;
+    }
+  }
+  return out;
+}
+
+// How the page should render an item's value. Mirrors the three ways the LCD menu treats them.
+const char* settingKindName(int index) {
+  if (settingIsToggle(index)) return "bool";
+  if (settingUsesDu(index)) return "du";
+  return "num";
+}
+
+// Items a section shows. The calibration section holds only the action that opens a screen on the
+// controller itself, which has no value to edit and no meaning over HTTP.
+int settingSectionValueCount(int section) {
+  int n = 0;
+  int first = settingSectionFirst(section);
+  int count = settingSectionCount(section);
+  for (int i = first; i >= 0 && i < first + count; i++) {
+    if (!settingIsAction(i)) n++;
+  }
+  return n;
+}
+
+void handleRoot() {
+  webServer.send_P(200, "text/html", WEB_PAGE);
+}
+
+// Streamed rather than built as one String: 60-odd items is only a few KB, but chunking keeps peak
+// allocation flat and matches how the page itself is served.
+void handleSettingsJson() {
+  webServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  webServer.send(200, "application/json", "");
+  webServer.sendContent("{\"version\":\"H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) +
+      "\",\"metric\":" + String(measure == MEASURE_METRIC ? 1 : 0) +
+      ",\"busy\":" + String(machineIsBusy() ? 1 : 0) + ",\"sections\":[");
+  bool firstSection = true;
+  for (int sec = 0; sec < SECTION_COUNT; sec++) {
+    int first = settingSectionFirst(sec);
+    if (first < 0 || settingSectionValueCount(sec) < 1) continue;
+    if (!firstSection) webServer.sendContent(",");
+    firstSection = false;
+    webServer.sendContent("{\"name\":\"" + jsonEscape(SECTION_NAMES[sec]) + "\",\"items\":[");
+    bool firstItem = true;
+    int count = settingSectionCount(sec);
+    for (int i = first; i < first + count; i++) {
+      if (settingIsAction(i)) continue;
+      if (!firstItem) webServer.sendContent(",");
+      firstItem = false;
+      // The unit is resolved here rather than on the page: a distance follows the metric/inch
+      // setting, and only the firmware knows which is selected.
+      const char* unit = settingUsesDu(i)
+          ? (measure == MEASURE_METRIC ? "mm" : "in")
+          : SETTINGS[i].unit;
+      String item = "{\"key\":\"" + settingsKeyName(i) +
+          "\",\"label\":\"" + jsonEscape(SETTINGS[i].label) +
+          "\",\"kind\":\"" + String(settingKindName(i)) +
+          "\",\"unit\":\"" + (unit == 0 ? String("") : jsonEscape(unit)) +
+          "\",\"value\":" + String(settingsReadValue(i));
+      if (settingIsToggle(i) && SETTINGS[i].onLabel != 0) {
+        item += ",\"on\":\"" + jsonEscape(SETTINGS[i].onLabel) +
+            "\",\"off\":\"" + jsonEscape(SETTINGS[i].offLabel) + "\"";
+      }
+      webServer.sendContent(item + "}");
+    }
+    webServer.sendContent("]}");
+  }
+  webServer.sendContent("]}");
+  webServer.sendContent("");
+}
+
+void handleStatusJson() {
+  String out = "{\"on\":" + String(isOn ? 1 : 0);
+  out += ",\"busy\":" + String(machineIsBusy() ? 1 : 0);
+  out += ",\"mode\":\"" + String(modeName()) + "\"";
+  out += ",\"rpm\":" + String(getApproxRpm());
+  out += ",\"z\":" + String(getAxisPosDu(&z));
+  out += ",\"x\":" + String(getAxisPosDu(&x) * (xDiameterDisplay ? 2 : 1));
+  out += ",\"a1\":" + String(a1.active ? getAxisPosDu(&a1) : 0);
+  out += ",\"a1active\":" + String(a1.active ? 1 : 0);
+  out += ",\"dia\":" + String(xDiameterDisplay ? 1 : 0);
+  out += ",\"measure\":" + String(measure);
+  out += ",\"pitch\":" + String(dupr);
+  out += ",\"uptime\":" + String(millis() / 1000);
+  out += "}";
+  webServer.send(200, "application/json", out);
+}
+
+// One axis worth of consequences. Everything here falls out of values already stored - none of it
+// is settable, and that is the point: a setting's effect is often not visible in the setting.
+String derivedAxisJson(Axis* a) {
+  String out = "{\"name\":\"";
+  out += a->name;
+  out += "\",\"fitted\":" + String(a->active ? 1 : 0);
+  out += ",\"resDu\":" + String(calStepResolutionDu(a->screwPitch, a->motorSteps), 4);
+  out += ",\"stepsPerMm\":" + String(calStepsPerMm(a->screwPitch, a->motorSteps), 2);
+  out += ",\"feedDuMin\":" + String(calMaxFeedDuPerMin(a->speedManualMove, a->screwPitch, a->motorSteps));
+  out += ",\"stopDu\":" + String(calStopDistanceDu(a->speedManualMove, a->speedStart, a->acceleration,
+                                                   a->screwPitch, a->motorSteps));
+  out += ",\"backlashSteps\":" + String(a->backlashSteps);
+  out += ",\"maxRpm\":" + String(calMaxRpmForPitch(a->speedManualMove, a->screwPitch, a->motorSteps, dupr));
+  out += "}";
+  return out;
+}
+
+void handleDerivedJson() {
+  String out = "{\"pitch\":" + String(dupr);
+  out += ",\"metric\":" + String(measure == MEASURE_METRIC ? 1 : 0);
+  out += ",\"axes\":[" + derivedAxisJson(&z) + "," + derivedAxisJson(&x);
+  if (a1.active) {
+    out += "," + derivedAxisJson(&a1);
+  }
+  out += "],\"encoder\":{";
+  out += "\"counts\":" + String(ENCODER_STEPS_INT);
+  out += ",\"deg\":" + String(calAngularResolutionDeg(ENCODER_STEPS_INT), 4);
+  out += ",\"maxEncoderRpm\":" + String(calMaxEncoderRpm(encoderPpr, encoderFilter));
+  out += ",\"maxSpindleRpm\":" + String(calMaxSpindleRpm(encoderPpr, encoderFilter,
+                                                         encoderSpindleTeeth, encoderPulleyTeeth));
+  out += ",\"divider\":" + String(encoderDivider);
+  out += "}}";
+  webServer.send(200, "application/json", out);
+}
+
+void handleSettingWrite() {
+  if (!webServer.hasArg("key") || !webServer.hasArg("value")) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"expected key and value\"}");
+    return;
+  }
+  const char* err = applySettingByKey(webServer.arg("key"), webServer.arg("value").toInt());
+  if (err == NULL) {
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    // 409 rather than 400: "machine is busy" is a state problem, not a malformed request, and the
+    // page retries on it rather than showing the value as rejected.
+    webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"" + jsonEscape(err) + "\"}");
+  }
+}
+
+void handleDump() {
+  webServer.sendHeader("Content-Disposition", "attachment; filename=nanoels-settings.txt");
+  webServer.send(200, "text/plain", settingsDumpText());
+}
+
+// Answers the upload POST once the body has been consumed by handleUpdateUpload().
+void handleUpdateDone() {
+  if (otaError.length() > 0) {
+    webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"" + otaError + "\"}");
+    otaInProgress = false;
+    return;
+  }
+  if (!otaWritten) {
+    // A POST that carried no file at all never reaches the upload handler, so without this it
+    // would fall through to the restart below on an empty error string.
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"no firmware in request\"}");
+    otaInProgress = false;
+    return;
+  }
+  webServer.send(200, "application/json", "{\"ok\":true}");
+  webServer.client().stop();
+  delay(500); // let the response actually leave before the radio goes down
+  ESP.restart();
+}
+
+void handleUpdateUpload() {
+  HTTPUpload& up = webServer.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    otaError = "";
+    otaWritten = false;
+    otaKb = 0;
+    if (machineIsBusy()) {
+      otaError = "machine is busy";
+      return;
+    }
+    // Set before the first write, not after. Writing to flash disables the instruction cache and
+    // stalls BOTH cores for the duration, so no step pulse train can survive it - loop() has to be
+    // out of the picture first. The stepper enable lines are deliberately left alone: dropping them
+    // would release the holding torque and let a heavy cross slide drift under its own weight.
+    otaInProgress = true;
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      otaError = String(Update.errorString());
+      otaInProgress = false;
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (otaError.length() > 0) return;
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      otaError = String(Update.errorString());
+    }
+    otaKb = up.totalSize / 1024;
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (otaError.length() > 0) {
+      Update.abort();
+      otaInProgress = false;
+      return;
+    }
+    if (!Update.end(true)) {
+      otaError = String(Update.errorString());
+      otaInProgress = false;
+      return;
+    }
+    // Deliberately leaves otaInProgress set: the image is written but not yet booted, and if the
+    // response never reaches the browser the safe outcome is a controller sitting still until it
+    // is power-cycled, not one that resumes stepping.
+    otaWritten = true;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    otaInProgress = false;
+    otaError = "upload aborted";
+  }
+}
+
+void updateOtaDisplay() {
+  long newHash = otaKb * 7L + (otaError.length() > 0 ? 3 : 1);
+  if (newHash == otaLcdHash) {
+    return;
+  }
+  otaLcdHash = newHash;
+  ensureLcdCharset(false);
+  lcd.setCursor(0, 0);
+  printLcdSpaces(lcd.print("Updating firmware"));
+  lcd.setCursor(0, 1);
+  int n = lcd.print(otaKb);
+  n += lcd.print(" KB written");
+  printLcdSpaces(n);
+  lcd.setCursor(0, 2);
+  printLcdSpaces(lcd.print("Do not power off"));
+  lcd.setCursor(0, 3);
+  printLcdSpaces(0);
+}
+
+// WebServer keeps its routes in a list that begin() does not clear, so registering them again on
+// every start would stack up duplicates each time the radio is cycled.
+bool webRoutesRegistered = false;
+
+void startWebServer() {
+  WiFi.mode(WIFI_AP);
+  // softAP() takes the password as text and silently opens the network if it is under 8
+  // characters, which is why the PIN is validated as exactly 8 digits when it is stored.
+  wifiUp = WiFi.softAP(WIFI_SSID, String(wifiPin).c_str(), WIFI_CHANNEL);
+  if (!wifiUp) {
+    splashError("WiFi failed to start");
+    // Leave the setting on but stop retrying every pass through the task: a failing softAP() in a
+    // tight loop would starve everything else on this core.
+    wifiEnabled = false;
+    return;
+  }
+  if (!webRoutesRegistered) {
+    webServer.on("/", HTTP_GET, handleRoot);
+    webServer.on("/api/settings", HTTP_GET, handleSettingsJson);
+    webServer.on("/api/status", HTTP_GET, handleStatusJson);
+    webServer.on("/api/derived", HTTP_GET, handleDerivedJson);
+    webServer.on("/api/setting", HTTP_POST, handleSettingWrite);
+    webServer.on("/api/dump", HTTP_GET, handleDump);
+    webServer.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+    webRoutesRegistered = true;
+  }
+  webServer.begin();
+  splash(WIFI_SSID);
+}
+
+void stopWebServer() {
+  webServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  wifiUp = false;
+  splash("WiFi off");
+}
+
+void taskWeb(void *param) {
+  while (emergencyStop == ESTOP_NONE) {
+    // The radio follows the setting rather than the boot state, so it can be switched on and off
+    // at the panel without a power cycle. While it is off nothing here touches WiFi at all, so a
+    // machine that never enables it pays only for an idle task.
+    if (wifiRestart && wifiUp) {
+      // The PIN changed underneath a running access point; it only takes effect on a fresh softAP.
+      stopWebServer();
+    }
+    wifiRestart = false;
+    if (wifiEnabled && !wifiUp) {
+      startWebServer();
+    } else if (!wifiEnabled && wifiUp) {
+      stopWebServer();
+    }
+    if (wifiUp) {
+      webServer.handleClient();
+    }
+    taskYIELD();
+  }
+  vTaskDelete(NULL);
+}
+
+// Moves to another item in the open section, wrapping inside it. delta of +-1 steps one item,
+// larger jumps a page.
 void settingsMove(int delta) {
   int first = settingSectionFirst(settingsSection);
   int count = settingSectionCount(settingsSection);

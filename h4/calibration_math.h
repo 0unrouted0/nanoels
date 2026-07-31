@@ -188,6 +188,93 @@ inline long calNumpadRawToDu(bool inchMode, long raw) {
 }
 
 // ---------------------------------------------------------------------------
+// Figures derived from the settings
+// ---------------------------------------------------------------------------
+//
+// None of these are stored anywhere - they fall out of values the user already set, and exist
+// because the consequences of a setting are not obvious from the setting itself. A 3mm pitch and
+// a Z axis that tops out at 1200mm/min mean a hard ceiling of 400 spindle rpm, and nothing on the
+// machine says so until a thread is ruined.
+
+// Distance one motor step moves the axis, in deci-microns. The floor under everything else: a
+// backlash or pitch correction finer than this cannot be expressed at all.
+inline float calStepResolutionDu(float screwPitch, float motorSteps) {
+  if (motorSteps < 1) {
+    return 0;
+  }
+  return screwPitch / motorSteps;
+}
+
+// Motor steps per millimetre, the way most other motion controllers state the same fact.
+inline float calStepsPerMm(float screwPitch, float motorSteps) {
+  if (screwPitch <= 0) {
+    return 0;
+  }
+  return motorSteps * 10000.0f / screwPitch;
+}
+
+// Fastest the axis can travel, in deci-microns per minute.
+inline long calMaxFeedDuPerMin(long speedStepsPerSec, float screwPitch, float motorSteps) {
+  if (motorSteps < 1) {
+    return 0;
+  }
+  return calRoundL((double)speedStepsPerSec * 60.0 * screwPitch / motorSteps);
+}
+
+// Highest spindle speed the axis can still keep up with at this pitch, in rpm. Above it the axis
+// is asked to move faster than its maximum step rate and the thread loses sync. duPerRev is the
+// pitch in deci-microns per spindle revolution; its sign is irrelevant, so left-hand threads give
+// the same answer.
+inline long calMaxRpmForPitch(long speedStepsPerSec, float screwPitch, float motorSteps, long duPerRev) {
+  long pitch = calAbsL(duPerRev);
+  if (pitch == 0 || motorSteps < 1) {
+    return 0;
+  }
+  return calRoundL((double)speedStepsPerSec * 60.0 * screwPitch / ((double)motorSteps * pitch));
+}
+
+// Highest rpm the ENCODER ITSELF may turn at before the glitch filter starts discarding real
+// pulses as noise. The filter accepts a transition only once the input has been stable for its
+// number of 12.5ns cycles, so the shortest pulse it will pass sets the ceiling. Same formula as
+// the comment on ENCODER_FILTER in machine_config.h.
+inline long calMaxEncoderRpm(int ppr, int filter) {
+  if (ppr < 1 || filter < 1) {
+    return 0;
+  }
+  return calRoundL(2.4e9 / ((double)ppr * filter));
+}
+
+// The same ceiling expressed at the spindle, which is what the operator actually controls. A
+// geared-up encoder spins faster than the spindle and so hits its limit sooner.
+inline long calMaxSpindleRpm(int ppr, int filter, int spindleTeeth, int pulleyTeeth) {
+  long encoderRpm = calMaxEncoderRpm(ppr, filter);
+  if (spindleTeeth < 1 || pulleyTeeth < 1) {
+    return encoderRpm;
+  }
+  return calRoundL((double)encoderRpm * pulleyTeeth / spindleTeeth);
+}
+
+// Spindle rotation represented by one count, in degrees. How precisely the controller can know
+// where the spindle is, which is the limit on thread start repeatability.
+inline float calAngularResolutionDeg(long countsPerSpindleRev) {
+  if (countsPerSpindleRev < 1) {
+    return 0;
+  }
+  return 360.0f / countsPerSpindleRev;
+}
+
+// How far the axis still travels while slowing from full speed to a stop, in deci-microns. Worth
+// knowing before setting a soft limit close to the chuck.
+inline long calStopDistanceDu(long speedManualMove, long speedStart, long acceleration,
+                              float screwPitch, float motorSteps) {
+  if (motorSteps < 1) {
+    return 0;
+  }
+  long steps = calDecelerateSteps(speedManualMove, speedStart, acceleration);
+  return calRoundL((double)steps * screwPitch / motorSteps);
+}
+
+// ---------------------------------------------------------------------------
 // WiFi
 // ---------------------------------------------------------------------------
 
