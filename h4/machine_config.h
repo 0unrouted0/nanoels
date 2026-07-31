@@ -76,7 +76,7 @@
 
 // Pulses per revolution per channel, as the encoder is marked. The firmware reads both edges of
 // both channels, so it sees 4x this many counts per encoder revolution.
-const int ENCODER_PPR = 600;
+const int ENCODER_PPR = 1000;
 
 // Belt or gear drive between spindle and encoder: the encoder turns SPINDLE_TEETH/PULLEY_TEETH
 // times per spindle revolution. Both 1 means the encoder is on the spindle directly. Only the
@@ -93,7 +93,7 @@ const int ENCODER_DIVIDER = 1;
 // back this far. Stops the carriage chasing small back-and-forth movement, at the cost of
 // ignoring a genuine reversal for this many counts. Works downstream of the divider, so reach
 // for the divider first.
-const int ENCODER_BACKLASH = 3;
+const int ENCODER_BACKLASH = 8;
 
 // Glitch filter in 12.5ns clock cycles, 1 - 1023. A transition is only accepted once the input
 // has been stable this long, which is the main defence against electrical noise on the encoder
@@ -104,7 +104,7 @@ const int ENCODER_BACKLASH = 3;
 // and remember a geared-up encoder spins faster than the spindle. At 1000 PPR and 200 that is
 // 12000 encoder rpm - 6000 at the spindle through a 1:2 belt. The same value on a 600 PPR
 // encoder allows 20000, so PPR and gearing both have to be accounted for before raising it.
-const int ENCODER_FILTER = 2;
+const int ENCODER_FILTER = 200; // 2.5us
 
 // ---------------------------------------------------------------------------
 // Main lead screw (Z)
