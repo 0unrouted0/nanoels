@@ -4,6 +4,11 @@
 // Nothing below this line should need changing to run on different hardware.
 #include "machine_config.h"
 
+// Arithmetic used by the motion and display code, kept in headers with no Arduino dependencies
+// so the host test suite in test/ can exercise exactly what the sketch calls.
+#include "calibration_math.h"
+#include "pass_math.h"
+
 const int ENCODER_STEPS_INT = ENCODER_PPR * 2; // Number of encoder impulses PCNT counts per revolution of the spindle
 const int PCNT_LIM = 31000; // Limit used in hardware pulse counter logic.
 const int PCNT_CLEAR = 30000; // Limit where we reset hardware pulse counter value to avoid overflow. Less than PCNT_LIM.
@@ -456,7 +461,7 @@ int getApproxRpm() {
   }
   int rpm = 0;
   if (spindleEncTimeDiffBulk > 0) {
-    rpm = 60000000 / spindleEncTimeDiffBulk;
+    rpm = calRpmFromBulkMicros(spindleEncTimeDiffBulk);
     if (abs(rpm - shownRpm) > (rpm < 1000 ? 3 : 5)) {
       // Don't update RPM with insignificant differences.
       shownRpm = rpm;
@@ -539,7 +544,7 @@ void printLcdSpaces(int charIndex) {
 }
 
 long stepsToDu(Axis* a, long steps) {
-  return round(steps * a->screwPitch / a->motorSteps);
+  return calStepsToDu(a->screwPitch, a->motorSteps, steps);
 }
 
 long getAxisPosDu(Axis* a) {
@@ -2627,7 +2632,7 @@ void modeTurn(Axis* main, Axis* aux) {
   // opIndex 0 is only executed once, do setup calculations here.
   if (opIndex == 0) {
     auxSafeDistance = (auxForward ? -1 : 1) * SAFE_DISTANCE_DU * aux->motorSteps / aux->screwPitch;
-    startOffset = starts == 1 ? 0 : round(ENCODER_STEPS_FLOAT / starts);
+    startOffset = passStartOffset(starts, ENCODER_STEPS_FLOAT);
 
     // Move to right-bottom limit.
     main->speedMax = main->speedManualMove;
@@ -2647,7 +2652,8 @@ void modeTurn(Axis* main, Axis* aux) {
       opIndexAdvanceFlag = false;
       opIndex += starts;
     }
-    long auxPos = auxEndStop - (auxEndStop - auxStartStop) / turnPasses * (turnPasses - ceil(opIndex / float(starts)));
+    long passNumber = passNumberForIndex(opIndex, starts, turnPasses);
+    long auxPos = passDepthPos(auxStartStop, auxEndStop, turnPasses, passNumber);
     // Bringing X to starting position.
     if (opSubIndex == 0) {
       stepToFinal(aux, auxPos);
