@@ -12,6 +12,7 @@
 #include "../beeper.h"
 #include "../aux_pins.h"
 #include "../indexing.h"
+#include "../mode_settings.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -1258,6 +1259,82 @@ static void testSurfaceSpeed() {
   expectL("and that is the floor", cssDeviationPercent(100000, 1), -99);
 }
 
+// Per-mode settings: the values that used to be one global each, and the validation that guards
+// them. The ranges matter more than they look - a clearance of zero puts the tool back into the
+// work on the return stroke, and a pass count of zero is divided by.
+static void testModeSettings() {
+  group("per-mode settings");
+  ModeSettings s;
+  memset(&s, 0, sizeof(s));
+
+  expectB("a fresh write succeeds", modeSettingWrite(&s, "tps", 6) == NULL, true);
+  expectL("and reads back", modeSettingRead(&s, "tps"), 6);
+  expectB("spring passes", modeSettingWrite(&s, "spp", 2) == NULL, true);
+  expectL("read back", modeSettingRead(&s, "spp"), 2);
+  expectB("clearance", modeSettingWrite(&s, "safe", 5000) == NULL, true);
+  expectL("read back", modeSettingRead(&s, "safe"), 5000);
+  expectB("peck depth", modeSettingWrite(&s, "pck", 2000) == NULL, true);
+  expectL("read back", modeSettingRead(&s, "pck"), 2000);
+  expectB("slot reduction", modeSettingWrite(&s, "slt", 500) == NULL, true);
+  expectL("read back", modeSettingRead(&s, "slt"), 500);
+  expectB("flank infeed", modeSettingWrite(&s, "fli", 1) == NULL, true);
+  expectL("read back as a flag", modeSettingRead(&s, "fli"), 1);
+  expectB("and off again", modeSettingWrite(&s, "fli", 0) == NULL, true);
+  expectL("reads back off", modeSettingRead(&s, "fli"), 0);
+
+  // Rejections. Each has to leave the stored value alone, or a refused edit would still land.
+  expectB("no passes is refused", modeSettingWrite(&s, "tps", 0) != NULL, true);
+  expectL("and the count is untouched", modeSettingRead(&s, "tps"), 6);
+  expectB("negative passes refused", modeSettingWrite(&s, "tps", -1) != NULL, true);
+  expectB("the ceiling is accepted", modeSettingWrite(&s, "tps", MODE_PASSES_MAX) == NULL, true);
+  expectB("one past it is not", modeSettingWrite(&s, "tps", MODE_PASSES_MAX + 1) != NULL, true);
+  expectL("still the ceiling", modeSettingRead(&s, "tps"), MODE_PASSES_MAX);
+
+  expectB("zero spring passes is fine - it means none", modeSettingWrite(&s, "spp", 0) == NULL, true);
+  expectB("99 spring passes accepted", modeSettingWrite(&s, "spp", MODE_SPRING_PASSES_MAX) == NULL, true);
+  expectB("100 refused", modeSettingWrite(&s, "spp", MODE_SPRING_PASSES_MAX + 1) != NULL, true);
+
+  // Zero clearance is the dangerous one: the tool would return through the cut it just made.
+  expectB("zero clearance refused", modeSettingWrite(&s, "safe", 0) != NULL, true);
+  expectB("negative clearance refused", modeSettingWrite(&s, "safe", -1) != NULL, true);
+  expectL("clearance survives both", modeSettingRead(&s, "safe"), 5000);
+
+  // Zero peck and zero slot reduction both legitimately mean "off".
+  expectB("zero peck is off, not invalid", modeSettingWrite(&s, "pck", 0) == NULL, true);
+  expectB("negative peck refused", modeSettingWrite(&s, "pck", -1) != NULL, true);
+  expectB("zero slot reduction is off", modeSettingWrite(&s, "slt", 0) == NULL, true);
+  expectB("negative slot reduction refused", modeSettingWrite(&s, "slt", -1) != NULL, true);
+
+  expectB("an unknown key is refused", modeSettingWrite(&s, "nope", 1) != NULL, true);
+  expectL("and reads as zero", modeSettingRead(&s, "nope"), 0);
+
+  // The whole point: two modes hold different values through the same functions.
+  group("modes keep their own values");
+  ModeSettings thread, face;
+  memset(&thread, 0, sizeof(thread));
+  memset(&face, 0, sizeof(face));
+  modeSettingWrite(&thread, "spp", 2);
+  modeSettingWrite(&face, "spp", 0);
+  modeSettingWrite(&thread, "tps", 6);
+  modeSettingWrite(&face, "tps", 3);
+  expectL("threading keeps its spring passes", modeSettingRead(&thread, "spp"), 2);
+  expectL("facing keeps none", modeSettingRead(&face, "spp"), 0);
+  expectL("threading keeps its pass count", modeSettingRead(&thread, "tps"), 6);
+  expectL("facing keeps its own", modeSettingRead(&face, "tps"), 3);
+
+  // Every mode-scoped row in the table must be a key these functions actually handle, or the
+  // menu would show an item that always reads zero and refuses every write.
+  bool everyRowHandled = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (!settingIsModeScoped(i) || settingIsAction(i)) continue;
+    ModeSettings probe;
+    memset(&probe, 0, sizeof(probe));
+    // 1 is inside the accepted range of every mode-scoped item.
+    if (modeSettingWrite(&probe, SETTINGS[i].prefKey, 1) != NULL) everyRowHandled = false;
+  }
+  expectB("every mode row's key is one the storage handles", everyRowHandled, true);
+}
+
 int main() {
   printf("calibration_math.h\n==================\n");
   testGeometry();
@@ -1279,6 +1356,7 @@ int main() {
   testAuxPins();
   testIndexing();
   testSurfaceSpeed();
+  testModeSettings();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

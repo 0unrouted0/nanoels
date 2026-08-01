@@ -138,7 +138,7 @@ Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installe
 .\test\run_tests.ps1
 ```
 
-No board required. The suite is 639 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+No board required. The suite is 684 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
 
 The web config page has its own suite, which extracts the JavaScript from `web_page.h` and runs it against a stubbed DOM. It's separate because it needs Node.js, and the C++ suite deliberately needs nothing but a compiler:
 
@@ -146,7 +146,7 @@ The web config page has its own suite, which extracts the JavaScript from `web_p
 .\test\run_web_tests.ps1
 ```
 
-It skips with a message rather than failing if node isn't installed. Worth running after touching the page, since a mistyped status field there fails silently on the machine and just leaves a blank readout.
+It skips with a message rather than failing if node isn't installed. Worth running after touching the page, since a mistyped status field there fails silently on the machine and just leaves a blank readout. 42 assertions, covering the unit conversions, one row of each kind, the repaint when the panel's metric/inch setting changes, and the live status strip.
 
 ## Usage manual
 

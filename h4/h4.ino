@@ -12,6 +12,7 @@
 #include "beeper.h"
 #include "aux_pins.h"
 #include "indexing.h"
+#include "mode_settings.h"
 
 // Runtime copies of the machine_config.h defaults that the settings menu can change. The
 // constants there are only the starting point for a device that has never been configured.
@@ -42,7 +43,7 @@ int ENCODER_STEPS_INT = ENCODER_PPR * ENCODER_COUNTS_PER_PULSE;
 const int PCNT_LIM = 31000;
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
 const int32_t STARTS_MAX = 124; // No more than 124-start thread
-const long PASSES_MAX = 999; // No more turn or face passes than this
+const long PASSES_MAX = MODE_PASSES_MAX; // No more turn or face passes than this
 const long SAVE_DELAY_US = 5000000; // Wait 5s after last save and last change of saveable data before saving again
 const long DIRECTION_SETUP_DELAY_US = 5; // Stepper driver needs some time to adjust to direction change
 const long STEPPED_ENABLE_DELAY_MS = 100; // Delay after stepper is enabled and before issuing steps
@@ -589,15 +590,7 @@ long settingsLcdHash = LCD_HASH_INITIAL; // Hash of the currently drawn settings
 //
 // The alternative was to make every reader index by mode, which would have touched the motion
 // code in dozens of places to fix a storage problem.
-long modePasses[SMODE_COUNT];
-long modeSpringPasses[SMODE_COUNT];
-long modeClearanceDu[SMODE_COUNT];
-long modePeckDu[SMODE_COUNT];
-bool modeFlankInfeed[SMODE_COUNT];
-long modeSlotReductionDu[SMODE_COUNT];
-// Kept beside them rather than in the settings table: the table stores longs and a taper is a
-// ratio like 0.0625. The setup wizard asks for it every run, so it never needed a menu row.
-float modeTaper[SMODE_COUNT];
+ModeSettings modeSet[SMODE_COUNT];
 bool modeScopedLoaded = false; // False until the arrays have been read from Preferences
 
 long springPasses = 0; // Extra passes at final depth in turn/face/thread modes, 0 = off
@@ -1036,44 +1029,28 @@ int settingModeOf(int m) {
   }
 }
 
-// Same letters settingModeLetter() puts in front of a stored key, reachable from a SettingMode
-// rather than from a table row - the save path has the mode but not the row.
-char modeLetterOf(int sm) {
-  switch (sm) {
-    case SMODE_TURN: return 't';
-    case SMODE_FACE: return 'f';
-    case SMODE_CUT: return 'p';
-    case SMODE_THREAD: return 'h';
-    case SMODE_TPR: return 'r';
-    case SMODE_ELLIPSE: return 'e';
-    case SMODE_SLOT: return 's';
-    case SMODE_CONE: return 'c';
-    default: return 0;
-  }
-}
-
 // Live set -> the mode's own copy, and back. Called either side of a mode change.
 void modeScopedStore(int sm) {
   if (sm == SMODE_NONE) return;
-  modePasses[sm] = turnPasses;
-  modeSpringPasses[sm] = springPasses;
-  modeClearanceDu[sm] = safeDistanceDu;
-  modePeckDu[sm] = peckDepthDu;
-  modeFlankInfeed[sm] = flankInfeed;
-  modeSlotReductionDu[sm] = slotLeftReductionDu;
-  modeTaper[sm] = coneRatio;
+  modeSet[sm].passes = turnPasses;
+  modeSet[sm].springPasses = springPasses;
+  modeSet[sm].clearanceDu = safeDistanceDu;
+  modeSet[sm].peckDu = peckDepthDu;
+  modeSet[sm].flankInfeed = flankInfeed;
+  modeSet[sm].slotReductionDu = slotLeftReductionDu;
+  modeSet[sm].taper = coneRatio;
 }
 
 void modeScopedLoad(int sm) {
   if (sm == SMODE_NONE) return;
-  turnPasses = modePasses[sm];
+  turnPasses = modeSet[sm].passes;
   savedTurnPasses = turnPasses; // it has not changed, it belongs to a different mode now
-  springPasses = modeSpringPasses[sm];
-  safeDistanceDu = modeClearanceDu[sm];
-  peckDepthDu = modePeckDu[sm];
-  flankInfeed = modeFlankInfeed[sm];
-  slotLeftReductionDu = modeSlotReductionDu[sm];
-  coneRatio = modeTaper[sm];
+  springPasses = modeSet[sm].springPasses;
+  safeDistanceDu = modeSet[sm].clearanceDu;
+  peckDepthDu = modeSet[sm].peckDu;
+  flankInfeed = modeSet[sm].flankInfeed;
+  slotLeftReductionDu = modeSet[sm].slotReductionDu;
+  coneRatio = modeSet[sm].taper;
   savedConeRatio = coneRatio; // it has not changed, it belongs to a different mode now
   // A pending taper from the mode being left must not land on the one being entered.
   nextConeRatio = coneRatio;
@@ -1085,36 +1062,12 @@ void modeScopedLoad(int sm) {
 // only up to date for the modes you are not in.
 long modeScopedRead(int sm, const char* k) {
   if (sm == settingModeOf(mode)) modeScopedStore(sm);
-  if (!strcmp(k, "tps")) return modePasses[sm];
-  if (!strcmp(k, "spp")) return modeSpringPasses[sm];
-  if (!strcmp(k, "safe")) return modeClearanceDu[sm];
-  if (!strcmp(k, "pck")) return modePeckDu[sm];
-  if (!strcmp(k, "fli")) return modeFlankInfeed[sm] ? 1 : 0;
-  if (!strcmp(k, "slt")) return modeSlotReductionDu[sm];
-  return 0;
+  return modeSettingRead(&modeSet[sm], k);
 }
 
 const char* modeScopedWrite(int sm, const char* k, long value) {
-  if (!strcmp(k, "tps")) {
-    if (value < 1 || value > PASSES_MAX) return "Must be 1 or above";
-    modePasses[sm] = value;
-  } else if (!strcmp(k, "spp")) {
-    if (value < 0 || value > 99) return "Must be 0 to 99";
-    modeSpringPasses[sm] = value;
-  } else if (!strcmp(k, "safe")) {
-    if (value <= 0) return "Must be above 0";
-    modeClearanceDu[sm] = value;
-  } else if (!strcmp(k, "pck")) {
-    if (value < 0) return "Must be 0 or above";
-    modePeckDu[sm] = value;
-  } else if (!strcmp(k, "fli")) {
-    modeFlankInfeed[sm] = value != 0;
-  } else if (!strcmp(k, "slt")) {
-    if (value < 0) return "Must be 0 or above";
-    modeSlotReductionDu[sm] = value;
-  } else {
-    return "Not a stored setting";
-  }
+  const char* err = modeSettingWrite(&modeSet[sm], k, value);
+  if (err != NULL) return err;
   // Editing the mode you are standing in has to reach the live set too, or the change would only
   // appear after switching away and back.
   if (sm == settingModeOf(mode)) modeScopedLoad(sm);
@@ -2520,21 +2473,21 @@ void setup() {
     settingKeyName(i, key);
     int sm = SETTINGS[i].mode;
     const char* k = SETTINGS[i].prefKey;
-    if (!strcmp(k, "tps")) modePasses[sm] = pref.getLong(key, pref.getInt(PREF_TURN_PASSES, 3));
-    else if (!strcmp(k, "spp")) modeSpringPasses[sm] = pref.getLong(key, pref.getLong("spp", 0));
-    else if (!strcmp(k, "safe")) modeClearanceDu[sm] = pref.getLong(key, pref.getLong("safe", SAFE_DISTANCE_DU));
-    else if (!strcmp(k, "pck")) modePeckDu[sm] = pref.getLong(key, pref.getLong("pck", 0));
-    else if (!strcmp(k, "fli")) modeFlankInfeed[sm] = pref.getBool(key, pref.getBool("fli", false));
-    else if (!strcmp(k, "slt")) modeSlotReductionDu[sm] = pref.getLong(key, pref.getLong("slt", 0));
+    if (!strcmp(k, "tps")) modeSet[sm].passes = pref.getLong(key, pref.getInt(PREF_TURN_PASSES, 3));
+    else if (!strcmp(k, "spp")) modeSet[sm].springPasses = pref.getLong(key, pref.getLong("spp", 0));
+    else if (!strcmp(k, "safe")) modeSet[sm].clearanceDu = pref.getLong(key, pref.getLong("safe", SAFE_DISTANCE_DU));
+    else if (!strcmp(k, "pck")) modeSet[sm].peckDu = pref.getLong(key, pref.getLong("pck", 0));
+    else if (!strcmp(k, "fli")) modeSet[sm].flankInfeed = pref.getBool(key, pref.getBool("fli", false));
+    else if (!strcmp(k, "slt")) modeSet[sm].slotReductionDu = pref.getLong(key, pref.getLong("slt", 0));
   }
-  // The taper has no table row - see modeTaper - so it is read directly. Both modes fall back to
+  // The taper has no table row - see ModeSettings - so it is read directly. Both modes fall back to
   // the old shared value, which is what they were both using before they were separated.
   {
     float shared = pref.getFloat(PREF_CONE_RATIO, 1);
-    modeTaper[SMODE_CONE] = pref.getFloat("ccr", shared);
+    modeSet[SMODE_CONE].taper = pref.getFloat("ccr", shared);
     // A tapered thread wants a taper, and 1:16 is NPT and BSPT - what the mode was built for.
     // Cone keeps 1, which is the ratio it has always started at.
-    modeTaper[SMODE_TPR] = pref.getFloat("rcr", shared != 1 ? shared : 0.0625f);
+    modeSet[SMODE_TPR].taper = pref.getFloat("rcr", shared != 1 ? shared : 0.0625f);
   }
   modeScopedLoaded = true;
   pulse1Use = pref.getBool("p1u", PULSE_1_USE);
@@ -2728,9 +2681,9 @@ bool saveIfChanged() {
     savedConeRatio = coneRatio;
     int sm = settingModeOf(mode);
     if (sm != SMODE_NONE) {
-      modeTaper[sm] = coneRatio;
+      modeSet[sm].taper = coneRatio;
       char key[16] = {'\0'};
-      key[0] = modeLetterOf(sm);
+      key[0] = settingModeLetterOf(sm);
       strcpy(key + 1, "cr");
       pref.putFloat(key, coneRatio);
     }
@@ -2741,9 +2694,9 @@ bool saveIfChanged() {
     savedTurnPasses = turnPasses;
     int sm = settingModeOf(mode);
     if (sm != SMODE_NONE) {
-      modePasses[sm] = turnPasses;
+      modeSet[sm].passes = turnPasses;
       char key[16] = {'\0'};
-      key[0] = modeLetterOf(sm);
+      key[0] = settingModeLetterOf(sm);
       strcpy(key + 1, "tps");
       pref.putLong(key, turnPasses);
     }

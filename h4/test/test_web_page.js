@@ -34,6 +34,7 @@ function el() {
 let strip = null;
 global.document = {
   hidden: false,
+  body: el(), // refreshBar() marks it while there are unsaved edits
   createElement: () => el(),
   addEventListener: () => {},
   getElementById(id) {
@@ -58,7 +59,7 @@ global.XMLHttpRequest = class {
 
 const mod = { exports: {} };
 new Function('module', 'exports', block[1] +
-  '\nmodule.exports = {fmtSpeed,parseSpeed,unitText,speedUnit,fmtDu,parseDu,status};'
+  '\nmodule.exports = {fmtSpeed,parseSpeed,unitText,speedUnit,fmtDu,parseDu,status,makeRow,render};'
 )(mod, mod.exports);
 const page = mod.exports;
 
@@ -90,6 +91,50 @@ eq('metric passes through', page.fmtSpeed(100), '100');
 eq('metric parses back', page.parseSpeed('100'), 100);
 ok('rubbish is rejected rather than becoming zero', page.parseSpeed('abc') === null);
 
+group('rows, one per kind');
+// A row is [label, control, unit]. Which control it gets is the whole of what `kind` decides,
+// and a kind the page does not know silently falls through to a text box - which for a list
+// would mean typing the index of a material by hand.
+function rowFor(item) { return page.makeRow(item); }
+
+const boolRow = rowFor({ kind: 'bool', label: 'Direction', key: 'einv', value: 1, on: 'inverted', off: 'normal' });
+eq('a toggle shows its own wording', boolRow.children[1].textContent, 'inverted');
+eq('and no unit', boolRow.children[2].textContent, '');
+
+const listRow = rowFor({ kind: 'list', label: 'Material', key: 'cmat', value: 2, options: ['Manual', 'Aluminium', 'Brass'] });
+eq('a list becomes a dropdown', listRow.children[1].children.length, 3);
+eq('showing the names, not the index', listRow.children[1].children[1].textContent, 'Aluminium');
+eq('selecting the stored one', listRow.children[1].value, '2');
+
+const numRow = rowFor({ kind: 'num', label: 'Motor steps', key: 'Zmst', value: 800, unit: 'steps' });
+eq('a number is shown plainly', numRow.children[1].value, '800');
+eq('with the unit from the table', numRow.children[2].textContent, 'steps');
+
+const duRow = rowFor({ kind: 'du', label: 'Backlash', key: 'Zbla', value: 6500 });
+eq('a distance is converted', duRow.children[1].value, '0.65');
+eq('and names its unit, which the table cannot', duRow.children[2].textContent, 'mm');
+
+const speedRow = rowFor({ kind: 'speed', label: 'Manual speed', key: 'css', value: 120 });
+eq('a speed in metric is itself', speedRow.children[1].value, '120');
+eq('and names its unit too', speedRow.children[2].textContent, 'm/min');
+
+group('following a units change made on the panel');
+// The measurement system can be changed on the machine while this page is open. Every distance
+// and speed on it is rendered in whichever is current, so the values and the unit labels both
+// have to be repainted - the label used to be written once and left.
+const items = [
+  { kind: 'du', label: 'Backlash', key: 'Zbla', value: 6500 },
+  { kind: 'speed', label: 'Manual speed', key: 'css', value: 120 },
+];
+page.render({ version: 'H4 V16', metric: 1, sections: [{ name: 'Test', items: items }] });
+eq('metric distance', items[0].row.children[1].value, '0.65');
+eq('metric speed unit', items[1].row.children[2].textContent, 'm/min');
+
+const inchPayload = {
+  on: 0, busy: 0, mode: '', rpm: 0, z: 0, x: 0, a1: 0, surface: 0, targetRpm: 0,
+  coherence: -1, worstCoherence: -1, dirtyWindows: 0, flips: 0, coherenceFloor: 95,
+  a1active: 0, dia: 0, measure: 1, pitch: 0, uptime: 1,
+};
 group('status strip');
 const payload = {
   on: 1, busy: 0, mode: 'TURN', rpm: 850, z: 123450, x: 254000, a1: 0,
@@ -97,11 +142,27 @@ const payload = {
   coherence: 100, worstCoherence: 96, dirtyWindows: 0, flips: 0, coherenceFloor: 95,
   a1active: 0, dia: 1, measure: 0, pitch: 20000, uptime: 42,
 };
-global.fetch = () => Promise.resolve({ json: () => Promise.resolve(payload) });
 const chipOf = (text) => '<span' + strip.split('<span').find((c) => c.includes(text));
 
-page.status();
-setImmediate(() => {
+// status() fetches, so every assertion about what it drew has to wait a turn. Sequential awaits
+// rather than nested callbacks: the order these run in is the point, and one payload mutating
+// under another's pending promise is exactly the sort of test bug that reads as a code bug.
+function poll(next) {
+  global.fetch = () => Promise.resolve({ json: () => Promise.resolve(next) });
+  strip = null;
+  page.status();
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+(async () => {
+  // Switching the panel to inches has to repaint the values and the unit labels together.
+  await poll(inchPayload);
+  eq('the distance follows into inches', items[0].row.children[1].value, '0.02559');
+  eq('and its unit label with it', items[0].row.children[2].textContent, 'in');
+  eq('the speed follows too', items[1].row.children[1].value, '394');
+  eq('and its unit label', items[1].row.children[2].textContent, 'ft/min');
+
+  await poll(payload);
   ok('the strip renders', typeof strip === 'string' && strip.length > 0);
   ok('shows rpm', strip.includes('850'));
   ok('shows the cutting speed', strip.includes('98'));
@@ -114,38 +175,29 @@ setImmediate(() => {
   ok('an off-target speed is flagged', chipOf('Mild steel').includes('bad'));
   ok('and says which way', chipOf('Mild steel').includes('+37%'));
 
-  strip = null;
   payload.coherence = 62;
   payload.worstCoherence = 41;
   payload.dirtyWindows = 7;
   payload.flips = 3;
-  page.status();
-  setImmediate(() => {
-    ok('a noisy signal is flagged', chipOf('signal').includes('bad'));
-    ok('counts the bad windows', strip.includes('7 bad'));
-    ok('counts the flips', strip.includes('3 flips'));
+  await poll(payload);
+  ok('a noisy signal is flagged', chipOf('signal').includes('bad'));
+  ok('counts the bad windows', strip.includes('7 bad'));
+  ok('counts the flips', strip.includes('3 flips'));
 
-    // 200 against 620 is -67.7%, which rounds away from zero to -68.
-    strip = null;
-    payload.rpm = 200;
-    page.status();
-    setImmediate(() => {
-      ok('running slow reads negative', strip.includes('-68%'));
+  // 200 against 620 is -67.7%, which rounds away from zero to -68.
+  payload.rpm = 200;
+  await poll(payload);
+  ok('running slow reads negative', strip.includes('-68%'));
 
-      // With constant speed off there is no target, and the chip must disappear rather than
-      // render a division by zero.
-      strip = null;
-      payload.targetRpm = 0;
-      payload.surface = 0;
-      page.status();
-      setImmediate(() => {
-        ok('no target, no chip', !strip.includes('Mild steel'));
-        ok('no diameter, no cutting speed', !strip.includes('m/min'));
-        ok('the rest of the strip survives', strip.includes('850') || strip.includes('200'));
+  // With constant speed off there is no target, and the chip must disappear rather than render a
+  // division by zero.
+  payload.targetRpm = 0;
+  payload.surface = 0;
+  await poll(payload);
+  ok('no target, no chip', !strip.includes('Mild steel'));
+  ok('no diameter, no cutting speed', !strip.includes('m/min'));
+  ok('the rest of the strip survives', strip.includes('200'));
 
-        console.log(`\n${checks} checks, ${failures} failures`);
-        process.exit(failures === 0 ? 0 : 1);
-      });
-    });
-  });
-});
+  console.log(`\n${checks} checks, ${failures} failures`);
+  process.exit(failures === 0 ? 0 : 1);
+})();

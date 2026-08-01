@@ -289,10 +289,14 @@ inline char settingAxisLetter(int index) {
   }
 }
 
-// Letter a mode-scoped item's storage key is prefixed with, or 0 for one that is not. Lower case
-// so it can never collide with an axis letter, which is what lets one key namespace hold both.
-inline char settingModeLetter(int index) {
-  switch (SETTINGS[index].mode) {
+// Letter a mode's storage keys are prefixed with, or 0 for SMODE_NONE. Lower case so it can never
+// collide with an axis letter, which is what lets one key namespace hold both - the cone taper
+// lives at "ccr" and a C axis item would be "Ccr".
+//
+// One definition, taken by mode rather than by row, because the save path has a mode and no row.
+// It was briefly written out twice and two switches that must agree is one too many.
+inline char settingModeLetterOf(int m) {
+  switch (m) {
     case SMODE_TURN: return 't';
     case SMODE_FACE: return 'f';
     case SMODE_CUT: return 'p';
@@ -303,6 +307,10 @@ inline char settingModeLetter(int index) {
     case SMODE_CONE: return 'c';
     default: return 0;
   }
+}
+
+inline char settingModeLetter(int index) {
+  return settingModeLetterOf(SETTINGS[index].mode);
 }
 
 inline bool settingIsModeScoped(int index) {
