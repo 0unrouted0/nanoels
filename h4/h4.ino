@@ -3910,6 +3910,13 @@ void handleStatusJson() {
     out += ",\"targetRpm\":" + String(wanted > 0
         ? cssCappedRpm(cssTargetRpm(diameterDu, wanted), spindleMaxRpm) : 0);
   }
+  // Encoder signal quality. Live, and polled, because the windows worth catching happen mid-cut -
+  // which is exactly when nobody is looking at the LCD.
+  out += ",\"coherence\":" + String(encHealth.coherence);
+  out += ",\"worstCoherence\":" + String(encHealth.worstCoherence);
+  out += ",\"dirtyWindows\":" + String(encHealth.dirtyWindows);
+  out += ",\"flips\":" + String(encoderReversals);
+  out += ",\"coherenceFloor\":" + String(ENCODER_COHERENCE_FLOOR);
   out += ",\"a1active\":" + String(a1.active ? 1 : 0);
   out += ",\"dia\":" + String(xDiameterDisplay ? 1 : 0);
   out += ",\"measure\":" + String(measure);
@@ -3950,14 +3957,10 @@ void handleDerivedJson() {
   out += ",\"maxSpindleRpm\":" + String(calMaxSpindleRpm(encoderPpr, encoderFilter,
                                                          encoderSpindleTeeth, encoderPulleyTeeth));
   out += ",\"divider\":" + String(encoderDivider);
-  // The same signal-quality figures the calibration screen shows, plus the dirty-window count
-  // there is no room for on the LCD. Worth having here because this page can be left open on a
-  // phone through a whole job, which is when a burst of noise is most likely to be caught.
-  out += ",\"coherence\":" + String(encHealth.coherence);
-  out += ",\"worstCoherence\":" + String(encHealth.worstCoherence);
-  out += ",\"dirtyWindows\":" + String(encHealth.dirtyWindows);
-  out += ",\"flips\":" + String(encoderReversals);
   out += ",\"symmetric\":" + String(encoderSymmetric ? 1 : 0);
+  // The live signal-quality figures are in /api/status, not here: this endpoint is fetched once
+  // when the page loads, and a coherence reading that never updates is worse than none - it would
+  // read as a clean signal for the rest of the session however noisy the machine became.
   out += "}}";
   webServer.send(200, "application/json", out);
 }

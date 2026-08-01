@@ -130,7 +130,7 @@ A few notes for a new setup:
 
 ## Tests
 
-The arithmetic that decides whether a part comes out the right size - screw pitch correction, backlash and travel conversions, encoder PPR derivation, spindle angle wrapping and the RPM accumulator - lives in `calibration_math.h`, which has no Arduino dependencies. The firmware includes it and calls it directly, so the tests exercise the shipped code rather than a copy of it.
+The arithmetic that decides whether a part comes out the right size - screw pitch correction, backlash and travel conversions, encoder PPR derivation, spindle angle wrapping, the RPM accumulator, pass sequencing, encoder signal quality, aux terminal conflicts, buzzer patterns, spindle indexing and surface speed - lives in headers with no Arduino dependencies. The firmware includes them and calls them directly, so the tests exercise the shipped code rather than a copy of it.
 
 Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installed:
 
@@ -138,7 +138,15 @@ Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installe
 .\test\run_tests.ps1
 ```
 
-No board required. The suite is 69 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+No board required. The suite is 639 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+
+The web config page has its own suite, which extracts the JavaScript from `web_page.h` and runs it against a stubbed DOM. It's separate because it needs Node.js, and the C++ suite deliberately needs nothing but a compiler:
+
+```
+.\test\run_web_tests.ps1
+```
+
+It skips with a message rather than failing if node isn't installed. Worth running after touching the page, since a mistyped status field there fails silently on the machine and just leaves a blank readout.
 
 ## Usage manual
 

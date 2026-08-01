@@ -40,6 +40,7 @@ h1 span{color:var(--dim);font-weight:400}
   padding:.2rem .5rem;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip b{font-weight:600}
 .chip.live{color:var(--ok)}
+.chip.bad{color:var(--warn);border-color:var(--warn)}
 main{max-width:44rem;margin:0 auto;padding:1rem}
 section{background:var(--card);border:1px solid var(--line);border-radius:.6rem;
   margin-bottom:.9rem;overflow:hidden}
@@ -216,6 +217,15 @@ function shown(item, v){
   return String(v);
 }
 
+// Distances and speeds carry no unit in the settings table because theirs is not fixed - it
+// follows the metric/inch setting - so it is supplied here. The panel has always named the unit
+// beside a distance; this page used to leave it blank.
+function unitText(item){
+  if(item.kind === "du") return metric ? "mm" : "in";
+  if(item.kind === "speed") return speedUnit();
+  return item.unit || "";
+}
+
 function makeRow(item){
   var row = document.createElement("div");
   row.className = "row";
@@ -277,8 +287,14 @@ function makeRow(item){
   inp.type = "text";
   inp.inputMode = "decimal";
   inp.value = shown(item, item.value);
+  // Declared before paint() so the unit can be repainted with the value. Distances and speeds
+  // have no fixed unit - it follows the metric/inch setting, which can be changed on the panel
+  // while this page is open - so the label has to be rewritten, not just the number.
+  var u = document.createElement("span");
+  u.className = "unit";
   item.paint = function(){
     inp.value = shown(item, item.pending !== undefined ? item.pending : item.value);
+    u.textContent = unitText(item);
   };
   inp.oninput = function(){
     var v = item.kind === "du" ? parseDu(inp.value)
@@ -297,11 +313,7 @@ function makeRow(item){
   // last of a group of related values.
   inp.onkeydown = function(e){ if(e.key === "Enter"){ e.preventDefault(); inp.blur(); saveAll(); } };
   row.appendChild(inp);
-  var u = document.createElement("span");
-  u.className = "unit";
-  // Speed has no fixed unit for the same reason a distance has none: it follows the metric/inch
-  // setting, so it is supplied here rather than carried in the table.
-  u.textContent = item.kind === "speed" ? speedUnit() : (item.unit || "");
+  u.textContent = unitText(item);
   row.appendChild(u);
   return row;
 }
@@ -395,12 +407,14 @@ function renderDerived(d){
 
   var e = d.encoder;
   h += '<div class="tblwrap"><table><thead><tr><th>Spindle</th><th>Counts/rev</th>' +
-    "<th>Angle</th><th>Encoder limit</th><th>Spindle limit</th></tr></thead><tbody><tr>" +
+    "<th>Angle</th><th>Encoder limit</th><th>Spindle limit</th><th>Dead-band</th>" +
+    "</tr></thead><tbody><tr>" +
     "<td>encoder</td>" +
     cell(e.counts + (e.divider > 1 ? " (÷" + e.divider + ")" : "")) +
     cell(e.deg.toFixed(3) + "°") +
     cell(e.maxEncoderRpm + " rpm") +
     cell(e.maxSpindleRpm + " rpm") +
+    cell(e.symmetric ? "symmetric" : "one-way") +
     "</tr></tbody></table></div>";
 
   var notes = [];
@@ -414,6 +428,10 @@ function renderDerived(d){
   }
   notes.push("The encoder stops being read reliably above <b>" + e.maxSpindleRpm +
              " rpm</b> at the spindle. Raise the glitch filter only if you understand that trade.");
+  notes.push("The <b>signal</b> chip at the top is live: it reads 100% on a clean encoder and " +
+             "keeps the lowest figure seen, so leave this page open through a job and check it " +
+             "afterwards. If it falls, fix the cable before masking it with the glitch filter or " +
+             "a symmetric dead-band.");
   h += '<p class="note">' + notes.join("<br>") + "</p></section>";
 
   document.getElementById("derived").innerHTML = h;
@@ -441,14 +459,25 @@ function render(data){
   refreshBar();
 }
 
-function chip(label, value, live){
-  return '<span class="chip' + (live ? " live" : "") + '">' + label +
+function chip(label, value, live, bad){
+  return '<span class="chip' + (live ? " live" : "") + (bad ? " bad" : "") + '">' + label +
          ' <b>' + value + '</b></span>';
 }
 
 function status(){
   if(document.hidden) return;
   fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+    // The measurement system can be changed on the panel while this page is open. Every distance
+    // and speed on it is rendered in whichever is current, so follow the change rather than
+    // showing millimetres until someone reloads.
+    if(s.measure !== undefined){
+      var wasMetric = metric;
+      metric = s.measure === 0;
+      if(metric !== wasMetric){
+        ALL.forEach(function(it){ if(it.paint) it.paint(); });
+        loadDerived();
+      }
+    }
     var html = "";
     html += chip("", s.on ? "RUNNING" : "stopped", s.on);
     if(s.mode) html += chip("mode", s.mode);
@@ -456,6 +485,30 @@ function status(){
     html += chip("Z", fmtDu(s.z) + (metric ? " mm" : " in"));
     html += chip(s.dia ? "X&oslash;" : "X", fmtDu(s.x) + (metric ? " mm" : " in"));
     if(s.a1active) html += chip("C", fmtDu(s.a1));
+
+    // Cutting speed at the tool. Only meaningful once there is a diameter to cut, which means X
+    // zeroed on the centerline - before that it reads zero and saying so would just be noise.
+    if(s.surface > 0) html += chip("cut", fmtSpeed(s.surface) + " " + speedUnit());
+
+    // Constant speed: what the spindle should be doing, and which way to turn the dial. Green
+    // once you are within a tenth of the target, which is as close as a belt-step lathe gets.
+    if(s.targetRpm > 0){
+      var off = Math.round((s.rpm - s.targetRpm) / s.targetRpm * 100);
+      var near = Math.abs(off) <= 10;
+      html += chip(s.material, s.targetRpm + " rpm " + (off >= 0 ? "+" : "") + off + "%", near, !near);
+    }
+
+    // Encoder signal. The low-water mark is the number that matters, so it is shown beside the
+    // current one rather than buried - noise arrives in bursts nobody is watching for.
+    if(s.coherence >= 0){
+      var lo = s.worstCoherence;
+      var dirty = s.dirtyWindows > 0 || s.flips > 0;
+      var sig = s.coherence + "%";
+      if(lo >= 0 && lo < s.coherence) sig += " low " + lo + "%";
+      if(s.dirtyWindows > 0) sig += " · " + s.dirtyWindows + " bad";
+      if(s.flips > 0) sig += " · " + s.flips + " flips";
+      html += chip("signal", sig, !dirty && lo >= s.coherenceFloor, dirty || (lo >= 0 && lo < s.coherenceFloor));
+    }
     document.getElementById("strip").innerHTML = html;
 
     busy = !!s.busy;
