@@ -14,6 +14,8 @@
 #include "indexing.h"
 #include "mode_settings.h"
 #include "modes.h"
+#include "lcd_line.h"
+#include "setup_line.h"
 
 // Runtime copies of the machine_config.h defaults that the settings menu can change. The
 // constants there are only the starting point for a device that has never been configured.
@@ -919,14 +921,26 @@ bool isPassMode() { return modeIsPass(mode); }
 bool manualMovesAllowedWhenOn() { return modeAllowsManualMovesWhenOn(mode); }
 int getLastSetupIndex() { return modeLastSetupIndex(mode); }
 
-// "2/3 " in front of a wizard question. Without it there is nothing to say the questions are a
-// sequence with an end rather than an unbounded interrogation, and no way to tell how far in you
-// are - which is most of what makes the pass modes hard to approach.
+// "2/3 " in front of a wizard question, for the screens still composed with lcd.print().
 int printSetupStep() {
   int n = lcd.print(setupIndex);
   n += lcd.print("/");
   n += lcd.print(getLastSetupIndex());
   return n + lcd.print(" ");
+}
+
+// Puts a built line on the display, turning the glyph placeholders back into custom characters.
+// They cannot travel through the buffer as their real codes because the millimetre glyph is
+// character 0, which would terminate the string.
+int printLcdLine(const LcdLine* l) {
+  for (int i = 0; i < l->len; i++) {
+    if (l->buf[i] == LCD_GLYPH_MM) {
+      lcd.write(customCharMmCode);
+    } else {
+      lcd.write((uint8_t) l->buf[i]);
+    }
+  }
+  return l->len;
 }
 
 Axis* getPitchAxis() {
@@ -1384,92 +1398,44 @@ void updateDisplay() {
         charIndex += lcd.print(gcodeCommand.substring(0, 20));
       }
     } else if (isPassMode()) {
+      // Composed by setup_line.h rather than here, so what this line says is under test - it is
+      // the one that tells you how to drive the machine, and it used to be twenty lcd.print()
+      // calls that nothing could inspect. The builder also stops at the display width, which is
+      // what makes the "Go" confirmation's offsets safe rather than counted by hand.
+      SetupLineInput in;
       bool missingZStops = needZStops() && (z.leftStop == LONG_MAX || z.rightStop == LONG_MIN);
-      bool missingStops = missingZStops || x.leftStop == LONG_MAX || x.rightStop == LONG_MIN;
-      if (!inNumpad && missingStops) {
-        charIndex += lcd.print(needZStops() ? "Set all stops" : "Set X stops");
-      } else if (numpadResult != 0 && setupIndex == 1) {
-        charIndex += printSetupStep();
-        long passes = min(PASSES_MAX, numpadResult);
-        charIndex += lcd.print(passes);
-        if (passes == 1) charIndex += lcd.print(" pass?");
-        else charIndex += lcd.print(" passes?");
-      } else if (!isOn && setupIndex == 1) {
-        charIndex += printSetupStep();
-        charIndex += lcd.print(turnPasses);
-        if (turnPasses == 1) charIndex += lcd.print(" pass?");
-        else charIndex += lcd.print(" passes?");
-      } else if (!isOn && setupIndex == 2) {
-        charIndex += printSetupStep();
-        if (mode == MODE_FACE) {
-          charIndex += lcd.print(auxForward ? "Right-left" : "Left-right");
-        } else if (mode == MODE_CUT) {
-          // Cut-off takes its direction from the sign of the pitch rather than from this
-          // question, so there is nothing here to change with the arrows.
-          charIndex += lcd.print(dupr >= 0 ? "Ext, pitch>0" : "Int, pitch<0");
-        } else {
-          charIndex += lcd.print(auxForward ? "External" : "Internal");
-        }
-        // Nothing else on the panel says the arrows change the answer, and the question mark on
-        // its own reads as a yes/no that ON would answer.
-        if (mode != MODE_CUT) charIndex += lcd.print(" <>");
-      } else if (!isOn && mode == MODE_TPR && setupIndex == 3) {
-        // Only the tapered thread asks for this; a straight thread never sees the step.
-        charIndex += printSetupStep();
-        if (numpadResult != 0) {
-          charIndex += lcd.print("Taper ");
-          charIndex += lcd.print(numpadToConeRatio(), 5);
-          charIndex += lcd.print("?");
-        } else {
-          charIndex += lcd.print("Taper ");
-          charIndex += printNoTrailing0(coneRatio);
-          charIndex += lcd.print("?");
-        }
-      } else if (!isOn && setupIndex == getLastSetupIndex()) {
-        charIndex += printSetupStep();
-        long zOffset = getPassModeZStart() - z.pos;
-        long xOffset = getPassModeXStart() - x.pos;
-        charIndex += lcd.print("Go");
-        // The offsets say the tool is about to move before it does, which is what the
-        // confirmation is for. But an offset can be ten characters with its sign and unit, and
-        // two of them plus the step counter overrun the line - which wraps onto the position
-        // line below and corrupts it. Print each only while there is room, and keep the "?".
-        if (zOffset != 0 && charIndex + 10 <= 19) {
-          charIndex += lcd.print(" ");
-          charIndex += lcd.print(z.name);
-          charIndex += printDeciMicrons(stepsToDu(&z, zOffset), 2);
-        }
-        if (xOffset != 0 && charIndex + 10 <= 19) {
-          charIndex += lcd.print(" ");
-          charIndex += lcd.print(x.name);
-          charIndex += printDeciMicrons(stepsToDu(&x, xOffset), 2);
-        }
-        charIndex += lcd.print("?");
-      } else if (isOn && numpadResult == 0) {
-        long springTotal = (mode == MODE_TURN || mode == MODE_FACE || isThreadMode()) ? springPasses * starts : 0;
-        long total = max(opIndex, long(turnPasses * starts) + springTotal);
-        charIndex += lcd.print(opIndex > turnPasses * starts ? "Spring " : "Pass ");
-        charIndex += lcd.print(opIndex);
-        charIndex += lcd.print(" of ");
-        charIndex += lcd.print(total);
-        // Completed passes as a progress bar in the remaining space.
+      in.mode = mode;
+      in.setupIndex = setupIndex;
+      in.passes = turnPasses;
+      in.numpadPasses = setupIndex == 1 ? numpadResult : 0;
+      in.taper = coneRatio;
+      in.numpadTaper = numpadResult != 0 ? numpadToConeRatio() : 0;
+      in.zOffsetDu = stepsToDu(&z, getPassModeZStart() - z.pos);
+      in.xOffsetDu = stepsToDu(&x, getPassModeXStart() - x.pos);
+      in.opIndex = opIndex;
+      in.springStart = turnPasses * starts;
+      in.opTotal = max(opIndex, long(turnPasses * starts) +
+          ((mode == MODE_TURN || mode == MODE_FACE || isThreadMode()) ? springPasses * starts : 0));
+      in.auxForward = auxForward;
+      in.dupr = dupr;
+      in.metric = measure == MEASURE_METRIC;
+      in.missingStops = missingZStops || x.leftStop == LONG_MAX || x.rightStop == LONG_MIN;
+      in.isOn = isOn;
+      in.inNumpad = inNumpad;
+
+      LcdLine line;
+      buildSetupLine(&line, &in);
+      charIndex += printLcdLine(&line);
+
+      // The progress bar fills whatever the text left, and stays here because it is drawn with
+      // the block glyph rather than with characters.
+      if (isOn && !inNumpad && charIndex > 0) {
         charIndex += lcd.print(" ");
         long barCols = 20 - charIndex;
-        long filled = total > 0 ? min(barCols, barCols * (opIndex - 1) / total) : 0;
+        long filled = in.opTotal > 0 ? min(barCols, barCols * (opIndex - 1) / in.opTotal) : 0;
         for (long i = 0; i < filled; i++) {
           charIndex += lcd.write(byte(255));
         }
-      } else if (!isOn && !inNumpad && setupIndex == 0) {
-        // The way in. With the stops set and nothing running there was nothing here at all, so
-        // the wizard behind the ON key was invisible - you had to already know it existed. This
-        // takes the line ahead of the angle and rpm readouts on purpose: in a pass mode, about to
-        // start, the next keypress matters more than the tacho.
-        //
-        // Not while the numpad is open: the line below echoes what is being typed, and that
-        // matters more than an instruction for something you have not asked for yet.
-        charIndex += lcd.print("ON to set up ");
-        charIndex += lcd.print(getLastSetupIndex());
-        charIndex += lcd.print(" steps");
       }
     } else if (mode == MODE_CONE) {
       if (numpadResult != 0 && setupIndex == 1) {

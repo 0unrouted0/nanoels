@@ -14,6 +14,8 @@
 #include "../indexing.h"
 #include "../mode_settings.h"
 #include "../modes.h"
+#include "../lcd_line.h"
+#include "../setup_line.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -1388,6 +1390,234 @@ static void testModePredicates() {
   expectB("but Z when turning", modePitchOnX(MODE_TURN), false);
 }
 
+// Compares a built line against what should be on the display. The millimetre glyph is character
+// 1 in the buffer - it cannot be its real code 0, which would terminate the string - so tests
+// write it as ~ and it is swapped in here.
+static void expectLine(const char* what, const LcdLine* l, const char* want) {
+  char expanded[64];
+  int n = 0;
+  for (int i = 0; want[i] != 0 && n < 63; i++) {
+    expanded[n++] = want[i] == '~' ? LCD_GLYPH_MM : want[i];
+  }
+  expanded[n] = 0;
+  checks++;
+  if (strcmp(l->buf, expanded) == 0) {
+    printf("  ok   %s\n", what);
+  } else {
+    failures++;
+    printf("  FAIL %s: got \"%s\", want \"%s\"\n", what, l->buf, want);
+  }
+}
+
+static void testLcdLine() {
+  group("building a display line");
+  LcdLine l;
+  lcdLineClear(&l);
+  lcdLineStr(&l, "Pitch ");
+  lcdLineFixed(&l, 1.25, 2);
+  expectLine("text and a number", &l, "Pitch 1.25");
+  expectL("and its length", l.len, 10);
+
+  // A line longer than the display used to wrap onto the next one and overwrite it. It cannot
+  // now: the builder stops, and says it stopped.
+  lcdLineClear(&l);
+  lcdLineStr(&l, "012345678901234567890123456789");
+  expectL("a long line stops at the display width", l.len, LCD_LINE_MAX);
+  expectB("and reports that it did", l.truncated, true);
+  expectLine("keeping the front of it", &l, "01234567890123456789");
+
+  lcdLineClear(&l);
+  lcdLineStr(&l, "01234567890123456789");
+  expectB("exactly full is not truncated", l.truncated, false);
+  expectL("no room left", lcdLineRoom(&l), 0);
+
+  group("numbers on the display");
+  lcdLineClear(&l); lcdLineLong(&l, 0);
+  expectLine("zero", &l, "0");
+  lcdLineClear(&l); lcdLineLong(&l, -42);
+  expectLine("negative", &l, "-42");
+  lcdLineClear(&l); lcdLineLong(&l, 123456789L);
+  expectLine("large", &l, "123456789");
+
+  // Arduino rounds half away from zero and the C library rounds half to even, so this is a
+  // transcription of Print::printFloat rather than a call to snprintf. If it drifted, the tests
+  // would pass while the display showed something else.
+  // 0.125 is exactly representable, so this really is the halfway case: Arduino gives 0.13 and
+  // the C library's round-half-to-even gives 0.12. Picking 1.005 would prove nothing - it is
+  // stored as 1.00499... and both would print 1.00.
+  lcdLineClear(&l); lcdLineFixed(&l, 0.125, 2);
+  expectLine("half rounds away from zero, as Arduino does", &l, "0.13");
+  lcdLineClear(&l); lcdLineFixed(&l, 1.999, 2);
+  expectLine("and carries into the integer part", &l, "2.00");
+  lcdLineClear(&l); lcdLineFixed(&l, -2.5, 0);
+  expectLine("negative rounds away too", &l, "-3");
+  lcdLineClear(&l); lcdLineFixed(&l, 0.0625, 5);
+  expectLine("a taper at full precision", &l, "0.06250");
+
+  group("distances in the selected units");
+  lcdLineClear(&l); lcdLineDeciMicrons(&l, 0, 5, true);
+  expectLine("zero needs no unit", &l, "0");
+  lcdLineClear(&l); lcdLineDeciMicrons(&l, 20000, 5, true);
+  expectLine("a whole millimetre drops its decimals", &l, "2~");
+  lcdLineClear(&l); lcdLineDeciMicrons(&l, 6500, 5, true);
+  expectLine("and keeps the ones it needs", &l, "0.65~");
+  lcdLineClear(&l); lcdLineDeciMicrons(&l, -50000, 2, true);
+  expectLine("negative", &l, "-5~");
+  lcdLineClear(&l); lcdLineDeciMicrons(&l, 254000, 5, false);
+  expectLine("an inch in inch mode", &l, "1\"");
+}
+
+static SetupLineInput turnSetup() {
+  SetupLineInput in;
+  memset(&in, 0, sizeof(in));
+  in.mode = MODE_TURN;
+  in.passes = 3;
+  in.metric = true;
+  in.auxForward = true;
+  in.dupr = 2000;
+  return in;
+}
+
+static void testSetupLine() {
+  group("the setup wizard's line");
+  LcdLine l;
+  SetupLineInput in = turnSetup();
+
+  // Before the wizard starts there was nothing here at all, so the wizard behind the play button
+  // was invisible unless you already knew it existed.
+  buildSetupLine(&l, &in);
+  expectLine("the way in", &l, "ON to set up 3 steps");
+
+  in.setupIndex = 1;
+  buildSetupLine(&l, &in);
+  expectLine("step one counts itself", &l, "1/3 3 passes?");
+  in.passes = 1;
+  buildSetupLine(&l, &in);
+  expectLine("one pass is singular", &l, "1/3 1 pass?");
+  in.numpadPasses = 12;
+  buildSetupLine(&l, &in);
+  expectLine("what is being typed wins", &l, "1/3 12 passes?");
+  in.numpadPasses = 5000; // above the ceiling
+  buildSetupLine(&l, &in);
+  expectLine("clamped to the ceiling", &l, "1/3 999 passes?");
+  in.numpadPasses = 0;
+  in.passes = 3;
+
+  // The question mark used to read as a yes/no that play would answer, when play accepts what is
+  // shown and the arrows are what change it.
+  in.setupIndex = 2;
+  buildSetupLine(&l, &in);
+  expectLine("step two says the arrows change it", &l, "2/3 External <>");
+  in.auxForward = false;
+  buildSetupLine(&l, &in);
+  expectLine("and the other way", &l, "2/3 Internal <>");
+
+  in.mode = MODE_FACE;
+  in.auxForward = true;
+  buildSetupLine(&l, &in);
+  expectLine("facing asks about direction along the face", &l, "2/3 Right-left <>");
+
+  // Parting has nothing for the arrows to change, so it must not claim they do.
+  in.mode = MODE_CUT;
+  buildSetupLine(&l, &in);
+  expectLine("parting takes its direction from the pitch", &l, "2/3 Ext, pitch>0");
+  in.dupr = -2000;
+  buildSetupLine(&l, &in);
+  expectLine("and says so the other way", &l, "2/3 Int, pitch<0");
+
+  group("the Go confirmation");
+  in = turnSetup();
+  in.setupIndex = 3;
+  buildSetupLine(&l, &in);
+  expectLine("already at the corner, nothing to move", &l, "3/3 Go?");
+
+  in.zOffsetDu = -50000;
+  buildSetupLine(&l, &in);
+  expectLine("says how far Z moves first", &l, "3/3 Go Z-5~?");
+  in.xOffsetDu = -20000;
+  buildSetupLine(&l, &in);
+  expectLine("and X", &l, "3/3 Go Z-5~ X-2~?");
+  expectB("which still fits", l.len <= LCD_LINE_MAX, true);
+
+  // This is the case that used to reach 23 characters and wrap onto the position line below,
+  // corrupting it. Both offsets cannot fit, so the second is dropped and the line stays whole.
+  in.zOffsetDu = -1234500;
+  in.xOffsetDu = -987600;
+  buildSetupLine(&l, &in);
+  expectB("two large offsets still fit the line", l.len <= LCD_LINE_MAX, true);
+  expectB("without truncating anything", l.truncated, false);
+  expectB("and the question mark survives", l.buf[l.len - 1] == '?', true);
+
+  group("the tapered thread's extra step");
+  in = turnSetup();
+  in.mode = MODE_TPR;
+  in.taper = 0.0625;
+  in.setupIndex = 3;
+  buildSetupLine(&l, &in);
+  expectLine("asks for the taper", &l, "3/4 Taper 0.06250?");
+  in.setupIndex = 4;
+  buildSetupLine(&l, &in);
+  expectLine("then confirms", &l, "4/4 Go?");
+  // A straight thread never sees that step - its step 3 is the confirmation.
+  in.mode = MODE_THREAD;
+  in.setupIndex = 3;
+  buildSetupLine(&l, &in);
+  expectLine("a straight thread goes at step three", &l, "3/3 Go?");
+
+  group("while it runs");
+  in = turnSetup();
+  in.isOn = true;
+  in.opIndex = 2;
+  in.opTotal = 6;
+  in.springStart = 4;
+  buildSetupLine(&l, &in);
+  expectLine("which pass of how many", &l, "Pass 2 of 6");
+  in.opIndex = 5;
+  buildSetupLine(&l, &in);
+  expectLine("and names the spring passes", &l, "Spring 5 of 6");
+
+  group("stops not set");
+  in = turnSetup();
+  in.missingStops = true;
+  buildSetupLine(&l, &in);
+  expectLine("turning needs all four", &l, "Set all stops");
+  in.mode = MODE_CUT;
+  buildSetupLine(&l, &in);
+  expectLine("parting only needs X", &l, "Set X stops");
+  // While a number is being typed the line below echoes it, and that matters more.
+  in.inNumpad = true;
+  in.setupIndex = 0;
+  buildSetupLine(&l, &in);
+  expectL("the numpad gets the line", l.len, 0);
+
+  // Nothing may ever exceed the display, whatever the inputs.
+  group("no input overruns the display");
+  bool everFits = true;
+  const long offsets[] = {0, -50, 50000, -1234500, 99999900L, -99999900L};
+  for (int mi = 0; mi < ALL_MODES_COUNT; mi++) {
+    if (!modeIsPass(ALL_MODES[mi])) continue;
+    for (long step = 0; step <= 4; step++) {
+      for (int o = 0; o < 6; o++) {
+        for (int metric = 0; metric < 2; metric++) {
+          SetupLineInput t = turnSetup();
+          t.mode = ALL_MODES[mi];
+          t.setupIndex = step;
+          t.zOffsetDu = offsets[o];
+          t.xOffsetDu = offsets[5 - o];
+          t.metric = metric != 0;
+          t.passes = 999;
+          t.opTotal = 9999;
+          t.opIndex = 9999;
+          LcdLine probe;
+          buildSetupLine(&probe, &t);
+          if (probe.len > LCD_LINE_MAX) everFits = false;
+        }
+      }
+    }
+  }
+  expectB("every mode, step, offset and unit fits", everFits, true);
+}
+
 // Per-mode settings: the values that used to be one global each, and the validation that guards
 // them. The ranges matter more than they look - a clearance of zero puts the tool back into the
 // work on the return stroke, and a pass count of zero is divided by.
@@ -1487,6 +1717,8 @@ int main() {
   testSurfaceSpeed();
   testModeSettings();
   testModePredicates();
+  testLcdLine();
+  testSetupLine();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

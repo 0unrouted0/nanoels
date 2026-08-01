@@ -143,6 +143,8 @@ Everything that can be decided without touching hardware lives in headers with n
 | `indexing.h` | spindle division, surface speed, the material table, metric/imperial |
 | `aux_pins.h` | which device may claim which auxiliary terminal |
 | `beeper.h` | the buzzer patterns |
+| `lcd_line.h` | building a display line, which cannot overrun the width |
+| `setup_line.h` | what the setup wizard's line actually says, at every step of every mode |
 
 What is left in `h4.ino` is the part that talks to hardware - the display, the keypad, the step generator, Preferences, WiFi - and that is not covered. Testing it would mean mocking LiquidCrystal, FreeRTOS and NVS, which is a larger undertaking than the firmware.
 
@@ -152,7 +154,7 @@ Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installe
 .\test\run_tests.ps1
 ```
 
-No board required. The suite is 732 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+No board required. The suite is 777 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
 
 The web config page has its own suite, which extracts the JavaScript from `web_page.h` and runs it against a stubbed DOM. It's separate because it needs Node.js, and the C++ suite deliberately needs nothing but a compiler:
 
