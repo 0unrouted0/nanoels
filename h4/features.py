@@ -1,98 +1,112 @@
-# The features sheet: what this firmware adds over the stock H4, and everything it does.
+# The features sheet: what this firmware adds over the one the H4 ships with, and everything it
+# can do, plus notes on buying hardware for a conversion.
+#
+# Written for someone deciding whether to use this, or working out what their lathe needs. Says
+# what a feature lets you do, not how it is implemented.
+#
+# The "what is new" list is not from memory: it was established by comparing this branch against
+# the stock firmware it is built on (commit 5de1419) and checking each feature against it.
 #
 # Style and machinery are in refsheet.py.  python features.py FEATURES.pdf
-#
-# The "new" column is not from memory: it was established by diffing this branch against the
-# upstream commit it is built on (5de1419) and checking whether each identifier exists there.
-# Upstream h4.ino is 3,074 lines; this branch adds 9,438 across 21 files.
 
 from refsheet import *
 
 # ---------------------------------------------------------------------------
-# Page 1 - what is different
+# Page 1 - what this adds over the stock firmware
 # ---------------------------------------------------------------------------
 
 CHANGES = [
-    ("Spindle encoder", [
-        ("Four times the resolution",
-         "Stock reads one channel at two edges per pulse. This reads both channels at four, so a "
-         "1000 PPR encoder resolves 4000 positions instead of 2000 — 0.09° rather than 0.18°."),
-        ("Direction in software",
-         "Reverses the count from the menu instead of swapping the A and B wires."),
-        ("Belt and gear ratios",
-         "Spindle-to-encoder teeth are a setting, so a geared encoder no longer has to be folded "
-         "into the PPR figure by hand."),
-        ("Divider and dead-band shape",
-         "Two ways to quieten a fluttering encoder. The dead-band can filter both directions "
-         "rather than only the reverse."),
-        ("Live signal quality",
-         "Coherence compares how far the counter travelled against how far it moved. A dithering "
-         "encoder reads as a stopped spindle on every other readout; this is the one that sees it."),
+    ("Set it up without a computer", [
+        ("Settings on the panel",
+         "The stock firmware is configured by editing the source and reflashing it. Here every "
+         "figure — screw pitches, motor steps, speeds, backlash — is a menu item on the machine."),
+        ("It measures itself",
+         "Fourteen guided routines work out the numbers for you on the actual lathe: how far each "
+         "screw really moves, how much slack it has, how fast the motors can go before they stall, "
+         "and how finely the spindle sensor reads."),
+        ("Save and restore",
+         "One command over USB prints every setting as text you can keep. Paste it back to restore "
+         "a machine, or to set up a second one the same way."),
+        ("From a phone",
+         "The controller can make its own WiFi network, so you can change settings and update the "
+         "firmware from a phone standing at the lathe. Off unless you switch it on."),
     ]),
-    ("New modes", [
-        ("XGEAR — power cross-feed",
-         "The electronic gearbox driving the cross slide instead of the carriage, for powered facing."),
-        ("SLOT — the lathe as a shaper",
-         "The spindle is not involved. Z strokes back and forth while X steps down, for keyways and flats."),
-        ("TPR — tapered threading",
-         "X drifts across as Z advances, so the thread grows on a cone. NPT and BSPT."),
+    ("New things it can cut", [
+        ("Powered cross-feed",
+         "The gearbox driving the cross slide instead of the carriage, so facing cuts are fed "
+         "evenly rather than by hand."),
+        ("Slotting",
+         "Uses the lathe as a shaper. The spindle stays still and the tool strokes back and forth "
+         "— keyways, flats and squares without a milling machine."),
+        ("Tapered threading",
+         "Threads cut on a taper, for pipe fittings such as NPT and BSPT."),
+        ("Thread list",
+         "52 common threads built in — metric, UNC/UNF, BSPP, trapezoidal, ACME and NPT. Choose "
+         "one and the feed is set for you."),
     ]),
-    ("Cutting", [
-        ("Spring passes", "Repeats the final pass at depth to take out deflection."),
-        ("Flank infeed",
-         "Phases the tool along the helix so it cuts mostly on the leading flank instead of "
-         "plunging on both."),
-        ("Peck parting", "Retracts periodically to break the chip."),
-        ("Thread database", "52 presets — metric, UN, BSPP, trapezoidal, ACME and NPT."),
-        ("One-key X retract", "Pulls the tool clear and puts it back on the same number."),
+    ("Better cuts", [
+        ("Spring passes",
+         "Repeats the last pass without going deeper, to take out the spring in the tool and get "
+         "the size you actually asked for."),
+        ("Angled thread infeed",
+         "Feeds the tool in at an angle so it cuts mainly on one side of the thread instead of "
+         "both at once. Easier on the tool and leaves a better finish."),
+        ("Peck parting",
+         "Backs the tool out every so often while parting off, to clear the swarf before it packs "
+         "in and jams."),
+        ("One-key retract",
+         "Pulls the tool clear of the work and puts it back on exactly the same number."),
     ]),
 ]
 
 CHANGES2 = [
-    ("Readouts", [
-        ("Large position display", "Z and X in two-row digits, readable across the shop."),
-        ("Diameter mode for X", "Type and read diameters rather than radii."),
-        ("Spindle indexing", "Divides a revolution into marks and beeps as you reach each one."),
-        ("Constant cutting speed",
-         "Says what rpm the current diameter wants, from a material and tool table. Advisory: "
-         "there is no spindle output on this board."),
+    ("Easier to read", [
+        ("Big position display",
+         "Z and X in digits you can read from a few feet away, instead of squinting at the panel."),
+        ("Diameter readout",
+         "Shows the cross slide as a diameter, which is how lathe work is measured, rather than as "
+         "distance from centre."),
+        ("Cutting speed helper",
+         "Tell it what you are cutting and with what, and it works out the spindle speed the "
+         "current diameter wants — and keeps telling you as the diameter changes."),
+        ("Spindle indexing",
+         "Divides a turn of the spindle into equal marks and beeps as you reach each one. With "
+         "slotting, that gives you hexagons and keyway sets without an indexer."),
     ]),
-    ("Configuration", [
-        ("Settings menu", "90 items on the panel. Stock has none — you edited the sketch and reflashed."),
-        ("Per-mode settings", "Passes, spring passes, clearance and the rest belong to the operation."),
-        ("Calibration routines",
-         "Fourteen guided measurements — screw pitch, backlash, travel, max speed, encoder PPR "
-         "and direction — that measure rather than assume."),
-        ("machine_config.h", "Every pin and machine constant in one file, out of the sketch."),
-        ("Serial interface", "$ dumps every setting for backup; $key=value writes one."),
+    ("A more trustworthy spindle sensor", [
+        ("Twice the resolution",
+         "Reads the sensor four times per pulse instead of twice, so it knows the spindle angle "
+         "twice as precisely from the same encoder."),
+        ("Sorted out in the menu",
+         "Counting direction, belt ratios and noise filtering are all settings now, rather than "
+         "wires to swap or numbers to work out by hand."),
+        ("It tells you when the wiring is bad",
+         "A live figure for how clean the signal is. Electrical interference from the motors is "
+         "the usual cause of a thread going wrong, and nothing else on the machine can see it — "
+         "a sensor twitching in place looks like a stopped spindle to everything else."),
     ]),
-    ("Connectivity", [
-        ("WiFi access point", "The controller makes its own network. Off by default: no radio at all."),
-        ("Web configuration", "Every setting from a phone at the lathe, plus a live status strip."),
-        ("Firmware over the air", "Update without a laptop. Refused unless the machine is stopped."),
-    ]),
-    ("Inputs and safety", [
-        ("Joystick", "Optional stick on the auxiliary terminals for jogging."),
-        ("Terminal conflict checking",
-         "Four devices want the same six pins. Enabling one over another's is refused rather than "
-         "quietly configuring the pins twice."),
-        ("Runtime enable", "Handwheels and the stick switch on without a restart."),
-        ("Distinct buzzer patterns", "A refused key, a finished pass and a lost thread sound different."),
-    ]),
-    ("Underneath", [
-        ("Host test suite",
-         "777 checks on the arithmetic and 42 on the web page, run on a PC without a board. "
-         "The firmware calls the same code the tests do."),
+    ("Small things that help", [
+        ("Settings per job",
+         "How many passes, how much clearance and so on are remembered separately for each kind of "
+         "job, so setting up a thread does not disturb your turning settings."),
+        ("Sounds that mean something",
+         "A refused key, a finished pass and a lost thread each sound different, so you can keep "
+         "your eyes on the work."),
+        ("Optional joystick",
+         "A stick for jogging the axes, if you would rather not use the keypad."),
+        ("Fewer ways to get it wrong",
+         "Four different things can be wired to the same six spare terminals; switching on one "
+         "that would clash with another is refused and says which."),
     ]),
 ]
 
 
 def page1():
-    story = [Paragraph("What this firmware adds", S_H2)]
-    story.append(P("Built on kachurovskiy/nanoels H4 at commit <b>5de1419</b>. Everything the stock "
-                   "firmware does is still here and works the same way — the list below is what is "
-                   "new. Upstream is 3,074 lines; this adds 9,438 across 21 files, about half of it "
-                   "tests and documentation.", S_BODY))
+    story = [Paragraph("What this adds", S_H2)]
+    story.append(P("This is the standard NanoEls H4 firmware with a good deal added. Everything the "
+                   "original does is still here and behaves the same way — the list below is what "
+                   "is new. Roughly half the additions are about setting the machine up and "
+                   "checking it is right, rather than about cutting metal.", S_BODY))
     story.append(Spacer(1, 5))
     w = column_width()
     story.append(two_columns(
@@ -100,26 +114,27 @@ def page1():
         stack([section_block(t, r, w) for t, r in CHANGES2])))
     story.append(Spacer(1, 8))
 
-    story.append(Paragraph("Coming from the stock firmware", S_H2))
-    story.append(P("Nothing here changes how the stock features behave, and your stored settings "
-                   "survive the update. Five things are worth doing once.", S_DIM))
+    story.append(Paragraph("If you are already running the standard firmware", S_H2))
+    story.append(P("Your settings survive the update and the machine will behave as it did. Five "
+                   "things are worth doing once afterwards.", S_DIM))
     story.append(Spacer(1, 3))
     steps = [
-        [P("1", S_CELL_B), P("Take a backup first. Send <b>$</b> over USB and keep the text — there "
-                             "is no undo in the settings menu.", S_CELL)],
-        [P("2", S_CELL_B), P("Leave the encoder <b>PPR</b> as it is. It still means pulses per "
-                             "revolution as marked; the firmware reads four counts from each rather "
-                             "than two, and works the rest out itself.", S_CELL)],
-        [P("3", S_CELL_B), P("Check the <b>glitch filter</b>. The counter now sees twice the traffic, "
-                             "and the usable ceiling is <b>2.4e9 / (PPR × filter)</b> encoder rpm — "
-                             "a geared-up encoder spins faster than the spindle, so account for the "
-                             "belt too.", S_CELL)],
-        [P("4", S_CELL_B), P("Run <b>Encoder signal</b> from the calibration menu and read the "
-                             "coherence figure during a real cut. It is the one readout that can "
-                             "tell you the cable is the problem.", S_CELL)],
-        [P("5", S_CELL_B), P("Everything that used to mean editing the sketch is now in the settings "
-                             "menu. <b>machine_config.h</b> only sets the defaults for a controller "
-                             "that has never been configured.", S_CELL)],
+        [P("1", S_CELL_B), P("Save your settings first. Send <b>$</b> over USB and keep the text "
+                             "somewhere — there is no undo.", S_CELL)],
+        [P("2", S_CELL_B), P("Leave the encoder <b>PPR</b> figure alone. It still means the same "
+                             "thing; the controller simply reads the sensor more finely and works "
+                             "the rest out itself.", S_CELL)],
+        [P("3", S_CELL_B), P("Check the <b>glitch filter</b>. It is a noise filter, and because the "
+                             "sensor is now read twice as often, a setting that was safe before can "
+                             "start losing pulses at high speed. There is a formula in the manual.",
+                             S_CELL)],
+        [P("4", S_CELL_B), P("Run <b>Encoder signal</b> from the calibration menu during a real cut "
+                             "and see what it reads. It should sit at 100. Anything less is "
+                             "interference on the sensor wiring, which is worth fixing properly "
+                             "rather than filtering out.", S_CELL)],
+        [P("5", S_CELL_B), P("Anything you used to change by editing the source is now in the "
+                             "settings menu. The source file only supplies the starting values for "
+                             "a controller that has never been set up.", S_CELL)],
     ]
     story.append(numbered(steps))
     return story
@@ -130,81 +145,84 @@ def page1():
 # ---------------------------------------------------------------------------
 
 FEATURES = [
-    ("Feeding", [
-        ("Electronic lead screw", "Carriage feeds from the spindle at any pitch, metric or imperial."),
-        ("Power cross-feed", "The same, driving X."),
-        ("Async feed", "A fixed feed rate with no spindle involved."),
-        ("Cone", "Constant ratio between X and Z for continuous taper turning."),
-        ("Manual jogging", "Arrow keys, with a selectable step down to 0.01mm."),
-        ("Handwheels", "Up to two pulse generators, each assignable to an axis."),
+    ("Feeding the tool", [
+        ("Screw-cutting gearbox", "Any feed or thread pitch, metric or imperial, without change gears."),
+        ("Powered cross-feed", "The same, driving the cross slide."),
+        ("Steady feed", "A fixed speed with the spindle out of it altogether."),
+        ("Taper turning", "The tool moves in as it travels along, at a ratio you set."),
+        ("Jogging", "Arrow keys, with a step size down to a hundredth of a millimetre."),
+        ("Handwheels", "Up to two, each assignable to whichever axis you like."),
     ]),
-    ("Automated operations", [
-        ("Turning and facing", "Multi-pass to a diameter or a face, returning between passes."),
-        ("Parting and grooving", "Feeds X in, with optional pecking."),
-        ("Threading", "Single-point, multi-pass, multi-start, straight or tapered."),
-        ("Slotting", "Shaper strokes for keyways and flats."),
-        ("Half-spheres and ellipses", "Convex or concave, over multiple passes."),
-        ("G-code", "Stored programs sent from the browser or over USB."),
-        ("Fourth axis", "An optional A1 axis, rotary or linear."),
+    ("Jobs it will do for you", [
+        ("Turning and facing", "To a size, in as many passes as you ask for."),
+        ("Parting and grooving", "With optional pecking to clear the swarf."),
+        ("Threading", "Straight or tapered, single or multi-start, from a list of 52 threads."),
+        ("Slotting", "Keyways and flats, using the lathe as a shaper."),
+        ("Balls and dishes", "Rounded ends, convex or concave."),
+        ("G-code", "Programs written on a computer and sent over."),
+        ("A fourth axis", "If you fit one — rotary or linear."),
     ]),
-    ("Precision", [
-        ("Backlash compensation", "Per axis, taken up automatically on a reversal."),
-        ("Soft limits", "Four stops that define the cut and cannot be passed."),
-        ("Gear and pulley ratios", "Belt drives on any axis and on the encoder."),
-        ("Spring passes", "Repeat at depth to take out deflection."),
-        ("Flank infeed", "Cut on the leading flank rather than plunging."),
+    ("Getting the size right", [
+        ("Backlash taken up", "Automatically, whenever an axis reverses."),
+        ("Limits", "Four marks that define the cut and cannot be overrun."),
+        ("Belt ratios", "On any axis and on the spindle sensor."),
+        ("Spring passes", "A repeat at size to take out tool spring."),
+        ("Angled thread infeed", "Cuts on one flank rather than plunging on both."),
     ]),
 ]
 
 FEATURES2 = [
-    ("What you can see", [
-        ("Position readout", "Z and X, metric or inch, radius or diameter."),
-        ("Large display", "Two-row digits for reading across the shop."),
-        ("Spindle angle and rpm", "Plus surface speed at the tool."),
-        ("Constant speed target", "The rpm the current diameter wants for the material set."),
-        ("Spindle indexing", "Divide a revolution into marks, with a beep at each."),
-        ("Encoder signal health", "Coherence and its low-water mark, live."),
-        ("Pass progress", "Which pass of how many, with a bar."),
+    ("What it will tell you", [
+        ("Where the tool is", "Millimetres or inches, radius or diameter."),
+        ("Big digits", "Readable from across the shop."),
+        ("Spindle speed and angle", "Plus the cutting speed at the tool."),
+        ("What speed to run", "For the material and tool you have told it about."),
+        ("Indexing", "Equal marks around a turn, with a beep at each."),
+        ("Sensor health", "Whether the spindle sensor is being interfered with."),
+        ("How far through", "Which pass of how many, with a bar."),
     ]),
     ("Setting it up", [
-        ("Settings menu", "Everything adjustable on the panel — no reflashing."),
-        ("Calibration routines", "Fourteen guided measurements on the actual lathe."),
-        ("Thread database", "52 presets across six thread families."),
-        ("Backup and restore", "One text dump over USB or from the browser."),
-        ("Web interface", "The same settings from a phone, with live status."),
-        ("Firmware over the air", "No laptop at the machine."),
+        ("Everything on the panel", "No reflashing to change a number."),
+        ("Self-measurement", "Fourteen routines that work out your lathe's figures for you."),
+        ("Thread list", "52 threads across six families."),
+        ("Backup and restore", "One text file, over USB or from the browser."),
+        ("From a phone", "The same settings, easier to type, with live readouts."),
+        ("Firmware updates", "Over WiFi, with no computer at the machine."),
     ]),
-    ("Looking after itself", [
-        ("Emergency stop", "On a lost position, a key stuck at power-up, or a demanded overtravel."),
-        ("Refusals with reasons", "A rejected input says why on screen and sounds its own tone."),
-        ("Terminal conflicts", "Two devices cannot claim the same pins."),
-        ("Motion lock on writes", "A setting cannot change underneath a move in progress."),
+    ("Keeping you out of trouble", [
+        ("Emergency stop", "If it loses track of position, or a key is stuck at power-up."),
+        ("It says why", "A refused action explains itself on screen and sounds its own tone."),
+        ("Wiring clashes", "Two devices cannot claim the same terminals."),
+        ("No changes mid-cut", "Settings will not change underneath a move in progress."),
     ]),
 ]
 
 HARDWARE = [
-    ("Controller", "The NanoEls H4 board — an ESP32-S3 with two stepper outputs, an encoder input, "
-                   "six auxiliary terminals and a 20×4 display. Boards and the PCB files are on the "
-                   "upstream project."),
-    ("Spindle encoder", "An incremental A/B quadrature encoder, 600–1000 PPR. Mount it on the "
-                        "spindle directly or on a 1:1 belt if you can. Push-pull output is easier "
-                        "than open-collector. Gearing it up multiplies the pulse rate, and the "
-                        "usable ceiling is <b>2.4e9 / (PPR × glitch filter)</b> encoder rpm — check "
-                        "that figure before choosing a high-count encoder."),
-    ("Encoder cable", "Shielded, twisted pairs, shield grounded at one end only, run away from the "
-                      "VFD and motor leads. This matters more than the encoder does: the coherence "
-                      "readout exists because noise here is the usual cause of a bad thread."),
-    ("Stepper motors", "Size to the axis, not the lathe. Z has to pull the carriage and wants the "
-                       "larger motor; X moves far less mass. Closed-loop steppers cost more and "
-                       "remove the one failure this firmware cannot detect — a step commanded and "
-                       "not taken."),
-    ("Drivers", "Microstepping of 400–800 steps per screw revolution is plenty; more costs torque "
-                "and buys nothing the lead screw can deliver. Set <b>Hold when idle</b> to off for "
-                "open-loop drivers that run hot holding position."),
-    ("Lead screws", "Ball screws remove most backlash and are worth it on X. Trapezoidal screws "
-                    "work — backlash is compensated in software, but compensation cannot help a "
-                    "screw that is also worn unevenly. Measure it with the backlash routine."),
-    ("Power", "24–48V for the steppers, sized for both at once. The controller runs from 5V."),
+    ("Controller", "The NanoEls H4 board: two stepper outputs, a spindle sensor input, six spare "
+                   "terminals and a 20×4 display. Boards and the circuit files come from the "
+                   "original project."),
+    ("Spindle sensor", "An incremental rotary encoder, 600 to 1000 pulses per revolution, with two "
+                       "output channels (A and B). Mount it straight on the spindle if you can, or "
+                       "on a 1:1 belt. Gearing it to spin faster than the spindle means more pulses "
+                       "to keep up with, and there is a speed ceiling — the manual has the sum. "
+                       "Higher resolution is not automatically better."),
+    ("Sensor wiring", "Shielded cable with twisted pairs, the shield earthed at one end only, run "
+                      "well away from the motor and VFD cables. This matters more than which "
+                      "encoder you buy. Interference here is the most common cause of a thread "
+                      "coming out wrong, which is why the firmware watches for it."),
+    ("Stepper motors", "Size them to the axis rather than the lathe. The carriage is heavy and "
+                       "wants the larger motor; the cross slide moves far less and needs less. "
+                       "Closed-loop motors cost more but remove the one fault the controller cannot "
+                       "detect: a step it asked for that never happened."),
+    ("Drivers", "400 to 800 steps per turn of the screw is plenty. Finer microstepping sounds "
+                "better but costs torque and buys nothing the screw can actually deliver. If a "
+                "motor runs hot standing still, turn off <b>Hold when idle</b> for that axis."),
+    ("Lead screws", "Ball screws remove nearly all the slack and are worth it on the cross slide "
+                    "first. Ordinary trapezoidal screws work fine — backlash is taken up "
+                    "automatically — but compensation cannot rescue a screw that is worn unevenly "
+                    "along its length. The backlash routine will tell you what you have."),
+    ("Power supply", "24 to 48 volts for the motors, rated for both running at once. The controller "
+                     "itself runs from 5 volts."),
 ]
 
 
@@ -216,25 +234,26 @@ def page2():
         stack([section_block(t, r, w) for t, r in FEATURES2])))
     story.append(Spacer(1, 8))
 
-    story.append(Paragraph("Choosing hardware for a conversion", S_H2))
-    story.append(P("General guidance rather than a parts list — the right answer depends on the "
-                   "lathe. Two things are worth more attention than they usually get: the encoder "
-                   "cable, and whether your steppers can be trusted not to lose steps.", S_DIM))
+    story.append(Paragraph("Buying hardware for a conversion", S_H2))
+    story.append(P("General guidance rather than a shopping list — the right answer depends on your "
+                   "lathe, and a motor that suits a small hobby machine will not move the carriage "
+                   "on a big one. Two things get less attention than they deserve: the sensor "
+                   "wiring, and whether your motors can be trusted not to lose steps.", S_DIM))
     story.append(Spacer(1, 3))
     data = [[P("Part", S_KEY), P("What to look for", S_KEY)]]
     for name, desc in HARDWARE:
         data.append([P(name, S_CELL_B), P(desc, S_CELL)])
     story.append(zebra(data, [30 * mm, None]))
     story.append(Spacer(1, 4))
-    story.append(P("Run the calibration routines after any mechanical change — the firmware only "
-                   "knows what it has been told or has measured, and a screw or motor swap makes "
-                   "every stored figure a guess.", S_NOTE))
+    story.append(P("Run the calibration routines again after any mechanical change. The controller "
+                   "only knows what it has been told or has measured, and swapping a screw or a "
+                   "motor turns every stored figure back into a guess.", S_NOTE))
     return story
 
 
 if __name__ == "__main__":
     import sys
-    build(sys.argv[1], "NanoEls H4  ·  Features",
+    build(sys.argv[1], "NanoEls H4  ·  What It Does",
           [page1(), page2()],
-          ["What is different from the stock firmware", "Full feature list and hardware notes"],
-          "Built on kachurovskiy/nanoels H4 at 5de1419")
+          ["What this adds to the standard firmware", "Full list, and choosing hardware"],
+          "Based on the NanoEls H4 firmware by kachurovskiy")

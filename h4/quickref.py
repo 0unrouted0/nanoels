@@ -1,18 +1,24 @@
-# The modes sheet: how to reach every mode, what each is for, and what it can be told.
+# The getting-started sheet: what the controller can do, how to ask for it, and how to set a
+# lathe up from scratch.
+#
+# Written for someone who has not used this controller before and may not have used a lathe much
+# either. Plain language, the job before the mechanism, and nothing assumed beyond knowing which
+# end of the machine the chuck is on.
 #
 # Style and machinery are in refsheet.py.  python quickref.py QUICKREF.pdf
 
 from refsheet import *
 
-# --------------------------------------------------------------------------
-# Page 1 - modes
-# --------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Page 1 - what the machine can do and how to ask for it
+# ---------------------------------------------------------------------------
 
 def key_badge_table(rows):
     """A row of key -> what it selects, showing the panel's own icon."""
     data = []
     for icons, what in rows:
-        data.append([icon_row(icons, 13), P("→", S_DIM), P(what, S_CELL)])
+        data.append([icon_row(icons, 13), P("&#8594;", S_DIM), P(what, S_CELL)])
     t = Table(data, colWidths=[24 * mm, 6 * mm, None])
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -27,361 +33,317 @@ def key_badge_table(rows):
     ]))
     return t
 
+
 MODES = [
     ("Gearbox", "—", ("IconGears", False),
-     "Electronic lead screw. Carriage feeds from the spindle at the set pitch.",
-     "none", "–"),
-    ("XGEAR", "XGEAR", ("IconGears", True),
-     "Power cross-feed. Same gearbox, driving the cross slide instead.",
-     "none", "–"),
+     "The carriage feeds along by itself as the spindle turns — what replaces change gears.",
+     "not needed", "–"),
+    ("Cross-feed", "XGEAR", ("IconGears", True),
+     "The same, driving the cross slide across the face. Powered facing.",
+     "not needed", "–"),
     ("Turning", "TURN", ("IconTurning", False),
-     "Turns to a diameter over several passes, returning between each.",
+     "Reduces a diameter over several passes, lifting the tool clear on each return.",
      "all four", "Passes · Spring passes · Clearance"),
     ("Facing", "FACE", ("IconFacing", False),
-     "Faces the end over several passes. Direction is set in the wizard, not by pitch sign.",
+     "Cleans up or shortens the end of the work, in several passes.",
      "all four", "Passes · Spring passes · Clearance"),
     ("Parting", "CUT", ("IconParting", False),
-     "Parting and grooving: feeds X in, optionally pecking to break the chip.",
-     "X only", "Passes · Peck depth · Clearance"),
+     "Cuts the work off, or cuts a groove. Can back out to clear the swarf.",
+     "up, down", "Passes · Peck depth · Clearance"),
     ("Threading", "THRD", ("IconThread", False),
-     "Single-point threading, multi-pass and multi-start. Up limit is full thread depth.",
-     "all four", "Passes · Spring passes · Flank infeed · Clearance · Thread database"),
+     "Cuts a screw thread, deeper each pass. Pick it from the list of 52 and the feed is set.",
+     "all four", "Passes · Spring passes · Flank infeed · Clearance · Thread list"),
     ("Tapered thread", "TPR", ("IconThread", True),
-     "Threading on a cone — NPT, BSPT. Asks for the taper as an extra wizard step.",
+     "A thread on a taper rather than a parallel bar — pipe fittings, NPT and BSPT.",
      "all four", "as threading, plus its own taper"),
-    ("Cone", "CONE", ("IconCone", False),
-     "Continuous taper turning at a set ratio. Feed in by hand between passes.",
-     "none", "taper ratio, asked in the wizard"),
-    ("Ellipse", "ELLI", ("IconM", False),
-     "Convex or concave half-spheres and half-ellipses over multiple passes.",
+    ("Taper", "CONE", ("IconCone", False),
+     "The tool moves in as it travels along, at a ratio you set. Feed in by hand.",
+     "not needed", "taper ratio, asked at the start"),
+    ("Ball and dish", "ELLI", ("IconM", False),
+     "Rounds the end into a ball, or hollows it into a dish.",
      "all four", "Passes"),
     ("Slotting", "SLOT", ("IconM", False),
-     "The lathe as a shaper. Spindle is not involved: Z strokes while X steps down.",
-     "all four", "Passes · Left reduction"),
-    ("Async", "ASY", ("IconM", False),
-     "Feed at a fixed rate, not synchronised to the spindle. Pitch means mm per second.",
-     "none", "–"),
+     "The lathe as a shaper: spindle still, tool stroking. Keyways and flats.",
+     "all four", "Passes · Stroke shortening"),
+    ("Steady feed", "ASY", ("IconM", False),
+     "A set feed rate with the spindle out of it. Handy for polishing.",
+     "not needed", "–"),
     ("G-code", "GCODE", ("IconM", False),
-     "Runs a stored program sent from the browser or over USB.",
-     "none", "–"),
-    ("A1 axis", "A1", ("IconM", False),
-     "Jogs and positions the fourth axis. Only in the cycle when A1 is fitted.",
-     "none", "–"),
+     "Runs a program written on a computer and sent over.",
+     "not needed", "–"),
+    ("Fourth axis", "A1", ("IconM", False),
+     "Drives a fourth motor, if you have fitted one.",
+     "not needed", "–"),
 ]
+
 
 def page1():
     story = []
-    story.append(Paragraph("Getting to a mode", S_H2))
-    story.append(P("Six buttons select a mode directly. Pressing the same button again reaches its "
-                   "hidden sibling where it has one.", S_DIM))
-    story.append(Spacer(1, 3))
-    story.append(key_badge_table([
-        (["IconGears"], "Gearbox  ·  press again for XGEAR (cross-feed)"),
-        (["IconTurning"], "Turning"),
-        (["IconFacing"], "Facing"),
-        (["IconParting"], "Parting"),
-        (["IconCone"], "Cone"),
-        (["IconThread"], "Threading  ·  press again for TPR (tapered)"),
-    ]))
-    story.append(Spacer(1, 5))
-    story.append(Table([[icon("IconM", 13), P("cycles the rest:  "
-                   "<font color='#0b6ec9'>A1</font> (if fitted) → "
-                   "<font color='#0b6ec9'>ELLI</font> → "
-                   "<font color='#0b6ec9'>GCODE</font> → "
-                   "<font color='#0b6ec9'>ASY</font> → "
-                   "<font color='#0b6ec9'>SLOT</font> → back to the gearbox", S_BODY)]], colWidths=[16, None], style=TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LEFTPADDING",(0,0),(-1,-1),0),("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0)])))
+
+    story.append(Paragraph("What this is", S_H2))
+    story.append(P("A controller that drives the carriage and the cross slide with stepper motors, "
+                   "keeping them in step with the spindle. It does the job of change gears and a "
+                   "lead screw, and adds automatic operations on top: mark the corners of the cut "
+                   "and it will make the passes for you.", S_BODY))
+    story.append(Spacer(1, 4))
+    intro = [
+        [P("Limits", S_CELL_B),
+         P("Most jobs need you to mark the corners of the cut first — how far along, and how deep "
+           "in — with the four limit keys. They are not guard rails: they <i>are</i> the cut.", S_CELL)],
+        [P("Passes", S_CELL_B),
+         P("A cut taken in stages. You say how many; it divides the depth between them and lifts "
+           "the tool clear on the way back.", S_CELL)],
+        [P("Feed", S_CELL_B),
+         P("How far the tool moves per turn of the spindle. On a thread that is the pitch; on a "
+           "turning cut it sets the finish.", S_CELL)],
+        [P("It moves itself", S_CELL_B),
+         P("Keep clear, know where the stop key is, and try anything new with the tool well away "
+           "from the work.", S_CELL)],
+    ]
+    story.append(numbered(intro, numw=20 * mm))
     story.append(Spacer(1, 7))
 
-    story.append(Paragraph("The modes", S_H2))
-    head = [P("Mode", S_KEY), P("On screen", S_KEY), P("Key", S_KEY),
-            P("What it is for", S_KEY), P("Stops", S_KEY), P("Its own settings", S_KEY)]
+    story.append(Paragraph("Choosing what it does", S_H2))
+    story.append(P("Each job has a key, shown in the table below. Two keys have a second job behind "
+                   "them: press the same key again to reach it, marked <b>&#215;2</b>.", S_DIM))
+    story.append(Spacer(1, 3))
+    story.append(Table([[icon("IconM", 13),
+                         P("steps through the rest:  "
+                           "<font color='#0b6ec9'>fourth axis</font> (if fitted) &#8594; "
+                           "<font color='#0b6ec9'>ball and dish</font> &#8594; "
+                           "<font color='#0b6ec9'>G-code</font> &#8594; "
+                           "<font color='#0b6ec9'>steady feed</font> &#8594; "
+                           "<font color='#0b6ec9'>slotting</font> &#8594; back to the gearbox",
+                           S_BODY)]],
+                       colWidths=[16, None],
+                       style=TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                         ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                         ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                         ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+    story.append(Spacer(1, 7))
+
+    head = [P("Job", S_KEY), P("Shows", S_KEY), P("Key", S_KEY),
+            P("What it is for", S_KEY), P("Limits", S_KEY), P("What you can adjust", S_KEY)]
     data = [head]
     for name, shown, key, what, stops, settings in MODES:
         data.append([P(name, S_CELL_B), P(shown, S_CELL), icon_key(key[0], key[1]),
                      P(what, S_CELL), P(stops, S_CELL), P(settings, S_CELL)])
-    t = Table(data, colWidths=[22 * mm, 14 * mm, 17 * mm, None, 12 * mm, 46 * mm], repeatRows=1)
-    st = [
-        ("BACKGROUND", (0, 0), (-1, 0), INK),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
-        ("BOX", (0, 0), (-1, -1), 0.6, LINE),
-    ]
-    for i in range(1, len(data)):
-        if i % 2 == 0:
-            st.append(("BACKGROUND", (0, i), (-1, i), SOFT2))
-    t.setStyle(TableStyle(st))
-    story.append(t)
+    story.append(zebra(data, [22 * mm, 13 * mm, 15 * mm, None, 15 * mm, 43 * mm]))
     story.append(Spacer(1, 7))
 
-    story.append(Paragraph("Running an automated mode", S_H2))
+    story.append(Paragraph("Running one of the automatic jobs", S_H2))
     wiz = [
         [P("1", S_CELL_B),
-         icon_row(["IconLimitLeft", "IconLimitRight", "IconLimitUp", "IconLimitDown"], 10, gap=0.8, joiner=""),
-         P("Set the pitch, then the soft limits. The limits are the cut — for a "
-           "thread the up limit is full depth.", S_CELL)],
+         icon_row(["IconLimitLeft", "IconLimitRight", "IconLimitUp", "IconLimitDown"], 10, gap=0.8),
+         P("Set the feed, then move the tool to each corner of the cut and press the matching "
+           "limit key. On a thread the <b>up</b> limit is full thread depth — see below.", S_CELL)],
         [P("2", S_CELL_B), icon_row(["IconPlay"], 10),
-         P("The bottom line reads <b>ON to set up 3 steps</b>. Press play.", S_CELL)],
-        [P("3", S_CELL_B), icon_row(["IconArrowLeft", "IconArrowRight", "IconPlay"], 10, gap=0.8, joiner=""),
-         P("Answer each step. <b>1/3</b> is where you are and how many there are. "
-           "<b>&lt;&gt;</b> means the arrows change the answer; a number is typed "
-           "on the numpad. Play accepts.", S_CELL)],
-        [P("4", S_CELL_B), icon_row(["IconPlay", "IconStop"], 10, gap=0.8, joiner=""),
-         P("The last step is always <b>Go?</b>, showing how far the tool moves to "
-           "reach the starting corner. Play starts it; stop returns to the beginning.", S_CELL)],
-        [P("5", S_CELL_B), icon_row(["IconPlay", "IconStop"], 10, gap=0.8, joiner=""),
-         P("While running the line reads <b>Pass 2 of 6</b> with a progress bar. "
-           "Play skips to the next pass; stop or a jog button ends it.", S_CELL)],
+         P("The bottom line reads <b>ON to set up 3 steps</b>. Press play to begin.", S_CELL)],
+        [P("3", S_CELL_B), icon_row(["IconArrowLeft", "IconArrowRight", "IconPlay"], 10, gap=0.8),
+         P("It asks a short series of questions. <b>1/3</b> tells you which one you are on and how "
+           "many there are. <b>&lt;&gt;</b> means the arrow keys change the answer; otherwise type "
+           "a number. Play accepts and moves on.", S_CELL)],
+        [P("4", S_CELL_B), icon_row(["IconPlay", "IconStop"], 10, gap=0.8),
+         P("The last question is <b>Go?</b>, and it shows how far the tool will travel to reach "
+           "the starting corner before it cuts anything. Play starts the job; stop takes you back "
+           "to the beginning.", S_CELL)],
+        [P("5", S_CELL_B), icon_row(["IconPlay", "IconStop"], 10, gap=0.8),
+         P("While it runs the line reads <b>Pass 2 of 6</b>. Play skips to the next pass if you "
+           "have taken enough off; stop, or any jog key, ends the job.", S_CELL)],
     ]
-    tw = Table(wiz, colWidths=[7 * mm, 23 * mm, None])
-    tw.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.4),
-        ("BACKGROUND", (0, 0), (-1, -1), SOFT),
-        ("BOX", (0, 0), (-1, -1), 0.6, LINE),
-        ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.white),
-    ]))
-    story.append(tw)
+    story.append(numbered(wiz, iconw=23 * mm))
     story.append(Spacer(1, 5))
-    story.append(P("Thread depth is yours to set: the controller sets the pitch from the database "
-                   "but cannot know how deep. For a 60° thread the depth on the <b>radius</b> is "
-                   "0.6134 × pitch — M10×1.5 is 0.92mm. In diameter readout mode, enter twice that.",
-                   S_NOTE))
-    story.append(Spacer(1, 9))
+    story.append(P("<b>How deep should a thread go?</b> The controller sets the pitch from its "
+                   "thread list, but it cannot know the depth — that is what the up limit tells it, "
+                   "and getting it wrong is the usual reason a first thread comes out badly. For an "
+                   "ordinary 60° thread the depth is <b>0.6134 × pitch</b> measured inwards from "
+                   "the surface, so an M10×1.5 goes 0.92mm deep. If the cross slide is set to read "
+                   "diameters rather than distance from centre, put in twice that.", S_NOTE))
+    story.append(Spacer(1, 8))
 
     story.append(Paragraph("Reading the screen", S_H2))
-    lcd_rows = [
-        [P("THRD* off  step 1.00", S_LCD)],
-        [P("Pitch 1.50mm x2", S_LCD)],
-        [P("Z 12.345  X 25.400", S_LCD)],
-        [P("3/3 Go Z-5.00mm?", S_LCD)],
-    ]
+    lcd_rows = [[P("THRD* off step 1.00", S_LCD)], [P("Pitch 1.50mm x2", S_LCD)],
+                [P("Z 12.345 X 25.400", S_LCD)], [P("3/3 Go Z-5.00mm?", S_LCD)]]
     lcd = Table(lcd_rows, colWidths=[62 * mm])
     lcd.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), LCDBG),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("BOX", (0, 0), (-1, -1), 1.2, INK),
     ]))
-
     legend = [
-        [P("Line 1", S_CELL_B), P("Mode, on/off, then a glyph for each soft limit that is set, and the jog step. "
-                                  "<b>*</b> means the key has a second mode behind it. During setup "
-                                  "it shows the distance between the stops instead.", S_CELL)],
-        [P("Line 2", S_CELL_B), P("Pitch, and the number of starts if more than one.", S_CELL)],
-        [P("Line 3", S_CELL_B), P("Z and X positions. A slashed X means the readout is diameter, not radius.", S_CELL)],
-        [P("Line 4", S_CELL_B), P("Everything else: the setup wizard, pass progress, refusal messages, "
-                                  "and whichever readout the display button has selected.", S_CELL)],
+        [P("Top", S_CELL_B), P("Which job is selected, whether it is running, a small mark for each "
+                               "limit you have set, and how far one tap of a jog key moves.", S_CELL)],
+        [P("Second", S_CELL_B), P("The feed, and the number of starts if the thread has more than "
+                                  "one.", S_CELL)],
+        [P("Third", S_CELL_B), P("Where the tool is. A slashed X means that figure is a diameter.",
+                                 S_CELL)],
+        [P("Bottom", S_CELL_B), P("Everything else — the setup questions, how many passes are done, "
+                                  "why something was refused, and whichever readout you have turned "
+                                  "on.", S_CELL)],
     ]
     lt = Table(legend, colWidths=[13 * mm, None])
     lt.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
         ("LINEBELOW", (0, 0), (-1, -2), 0.35, LINE),
     ]))
-
     pair = Table([[lcd, lt]], colWidths=[66 * mm, None])
     pair.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (0, 0), 0),
-        ("RIGHTPADDING", (0, 0), (0, 0), 6 * mm),
-        ("LEFTPADDING", (1, 0), (1, 0), 0),
-        ("RIGHTPADDING", (1, 0), (1, 0), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (0, 0), 6 * mm), ("TOPPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(pair)
     story.append(Spacer(1, 4))
-    story.append(P("The <b>display</b> button cycles what line 4 shows when nothing else needs it: "
-                   "spindle angle → rpm with cutting speed → large two-line position readout → off. "
-                   "Spindle divisions replaces the angle with an index readout; constant speed "
-                   "replaces the cutting speed with the rpm you should be at.", S_DIM))
+    story.append(P("The <b>display</b> key changes what the bottom line shows when it is otherwise "
+                   "idle: spindle angle, then spindle speed alongside the cutting speed at the "
+                   "tool, then big position digits you can read from a few feet away, then nothing.",
+                   S_DIM))
     return story
 
-# --------------------------------------------------------------------------
-# Page 2 - setup and global settings
-# --------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Page 2 - setting the machine up
+# ---------------------------------------------------------------------------
 
 SETUP = [
-    ("1", "Input tester", "no movement", "Every key reports a code. Confirms the panel before anything moves."),
-    ("2", "Encoder signal", "no movement", "Coherence should read 100 while the spindle turns. Fix the cable, not the filter."),
-    ("3", "Encoder PPR", "you hand-turn", "Counts through a known number of turns and derives the pulses per revolution."),
-    ("4", "Encoder direction", "no movement", "Turn the spindle forward; the count must rise."),
-    ("5", "Z / X direction", "axis moves", "Confirms which way each axis travels before any measured move."),
-    ("6", "Z / X screw pitch", "axis moves", "Moves a known distance, you measure it, the pitch is corrected."),
-    ("7", "Z / X backlash", "axis moves", "Takes up the slack against an indicator to find the lost motion."),
-    ("8", "Z / X travel limit", "you jog", "Jog to each end to record the usable travel."),
-    ("9", "Z / X max speed", "axis moves", "Ramps until the motor stalls, then backs off. Do this last."),
+    ("1", "Input tester", "nothing moves",
+     "Press every key and check it registers. Confirms the panel works before anything is asked to move."),
+    ("2", "Encoder signal", "nothing moves",
+     "Watches the spindle sensor for electrical interference. Should sit at 100 while the spindle turns."),
+    ("3", "Encoder PPR", "you turn the chuck",
+     "Turn the spindle a set number of times by hand; it works out how finely the sensor reads."),
+    ("4", "Encoder direction", "nothing moves",
+     "Turn the spindle forwards. If the number counts down instead of up, this flips it."),
+    ("5", "Z / X direction", "the axis moves",
+     "Checks each axis travels the way you expect, before anything is measured against it."),
+    ("6", "Z / X screw pitch", "the axis moves",
+     "Moves a set distance; you measure what it actually moved, and it corrects itself to match."),
+    ("7", "Z / X backlash", "the axis moves",
+     "Finds the slack in each screw against a dial indicator, so it can be taken up automatically."),
+    ("8", "Z / X travel limit", "you jog it",
+     "Wind each axis to its ends so the controller knows how far it is allowed to go."),
+    ("9", "Z / X max speed", "the axis moves",
+     "Speeds up until the motor stalls, then backs off. Leave this one until last."),
 ]
 
 SECTIONS = [
-    ("Preferences", [
-        ("X readout", "Radius or diameter. Diameter doubles every X figure you type and see."),
-        ("Retract distance", "How far the one-key X retract pulls the tool clear."),
+    ("How things behave", [
+        ("X readout", "Whether the cross slide shows how far it is from centre, or the diameter "
+                      "that gives — twice as much. Lathe work is usually quoted as a diameter."),
+        ("Retract distance", "How far the tool jumps clear when you press the retract key."),
         ("Manual step time", "How long one tap of a jog key takes."),
-        ("Step rest", "Pause between stepped moves."),
-        ("Spindle divisions", "Turns the angle readout into an indexer. 0 is off, 6 gives hex flats."),
-        ("Index tolerance", "How close counts as on the mark, in tenths of a degree."),
-        ("Constant speed", "The single switch for the cutting-speed readout."),
-        ("Material", "Picks the speed from a table. Manual means use the figure below."),
-        ("Tool", "HSS or carbide. Carbide runs roughly three times as fast."),
-        ("Manual speed", "Surface speed when Material is Manual. Follows metric/inch."),
-        ("Spindle max rpm", "Your lathe's ceiling, so an unreachable target is shown capped."),
+        ("Step rest", "A pause between stepped moves."),
+        ("Spindle divisions", "Turns the angle display into an indexer for cutting flats or "
+                              "keyways. 0 is off; 6 gives you a hexagon."),
+        ("Index tolerance", "How close to a mark counts as being on it."),
+        ("Constant speed", "The single switch for the cutting-speed helper below."),
+        ("Material", "What you are cutting. Sets a sensible cutting speed for you."),
+        ("Tool", "High speed steel or carbide. Carbide takes roughly three times the speed."),
+        ("Manual speed", "Your own figure, used when Material is set to Manual."),
+        ("Spindle max rpm", "The fastest your lathe runs, so it never suggests more."),
     ]),
-    ("Spindle encoder", [
-        ("Encoder PPR", "Pulses per revolution as marked. Read four times over."),
-        ("Direction", "Reverses the count without swapping wires."),
-        ("Spindle / Encoder pulley", "Teeth either end of the belt, if the encoder is geared."),
-        ("Divider", "Folds several counts into one step to steady a fluttering encoder."),
-        ("Dead-band", "How far the count must reverse before the axes follow."),
-        ("Dead-band shape", "One-way models screw backlash; symmetric filters both directions."),
-        ("Glitch filter", "Noise rejection. Too high and real pulses are dropped at speed."),
-    ]),
-    ("Z axis  /  X axis  /  A1 axis", [
-        ("Invert direction", "If the axis moves the wrong way."),
-        ("Backlash", "Lost motion, taken up automatically on a reversal."),
-        ("Lead screw pitch", "Travel per screw revolution."),
-        ("Motor steps/rev", "Including microstepping."),
-        ("Motor / Lead screw pulley", "Teeth either end, for a belt-driven axis."),
-        ("Start speed", "Where the acceleration ramp begins."),
-        ("Max speed", "Ceiling for rapid and manual moves."),
-        ("Acceleration", "Steps per second squared."),
-        ("Max travel", "Used for the emergency stop limit."),
-        ("Hold when idle", "Off for open-loop drivers that get hot holding position."),
-        ("Fitted / Rotary", "A1 only: whether it exists, and whether it turns rather than slides."),
-    ]),
-    ("Handwheels", [
-        ("Fitted 1 / 2", "Whether each pulse generator is connected."),
-        ("Drives 1 / 2", "Which axis it turns."),
-        ("Invert 1 / 2", "If it drives the wrong way."),
-        ("Pulses per rev", "Of the handwheel itself."),
-        ("Min pulse width", "Noise rejection, in microseconds."),
-        ("Dead-band", "Stops a reversal being read from a wobble."),
-    ]),
-    ("Joystick", [
-        ("Fitted", "Needs all six auxiliary terminals, so it conflicts with everything else on them."),
-        ("Debounce", "Contact changes quicker than this are switch bounce."),
-    ]),
-    ("WiFi and updates", [
-        ("Enabled", "Brings up the machine's own access point. Off means no radio at all."),
-        ("Access PIN", "The WPA2 password, exactly 8 digits. Change it from the default."),
+    ("Spindle sensor", [
+        ("Encoder PPR", "How many pulses it gives per turn. Usually printed on the body."),
+        ("Direction", "Flips the counting direction without rewiring anything."),
+        ("Spindle / sensor pulley", "Tooth counts, if the sensor is belt driven rather than "
+                                    "straight off the spindle."),
+        ("Divider", "Ignores very small movements, for a sensor that twitches at rest."),
+        ("Dead-band", "How far the spindle must turn back before the tool follows it."),
+        ("Dead-band shape", "One-way suits a worn lead screw; symmetric suits a noisy sensor."),
+        ("Glitch filter", "Ignores electrical spikes. Set too high it starts missing real pulses."),
     ]),
 ]
 
-def page2():
-    story = []
-    story.append(Paragraph("First-time setup", S_H2))
-    story.append(P("Flash the firmware, then pick metric or inch with the measure button. Open the "
-                   "calibration routines: <b>hold</b> the settings button → <b>Calibration</b> → play. "
-                   "Work down this list — it runs from zero risk to most, and each routine is more "
-                   "trustworthy once the ones above it are right.", S_BODY))
-    story.append(Spacer(1, 3))
+SECTIONS2 = [
+    ("Each axis  ·  Z, X and the fourth", [
+        ("Invert direction", "If the axis travels the wrong way."),
+        ("Backlash", "The slack in the screw, taken up automatically whenever it reverses."),
+        ("Lead screw pitch", "How far the axis moves for one turn of its screw."),
+        ("Motor steps/rev", "From the motor and its driver settings together."),
+        ("Motor / screw pulley", "Tooth counts, if the motor drives through a belt."),
+        ("Start speed", "How gently it sets off before speeding up."),
+        ("Max speed", "The fastest it will travel."),
+        ("Acceleration", "How briskly it gets up to that speed."),
+        ("Max travel", "How far the axis can physically go, used as a safety net."),
+        ("Hold when idle", "Whether the motor stays locked when stopped. Turn off if it runs hot."),
+        ("Fitted / Rotary", "Fourth axis only: whether it exists, and whether it turns or slides."),
+    ]),
+    ("Handwheels", [
+        ("Fitted 1 / 2", "Whether each handwheel is connected."),
+        ("Drives 1 / 2", "Which axis it winds."),
+        ("Invert 1 / 2", "If it winds the wrong way."),
+        ("Pulses per rev", "Of the handwheel itself."),
+        ("Min pulse width", "Ignores electrical noise on its wiring."),
+        ("Dead-band", "Stops a wobble being read as a change of direction."),
+    ]),
+    ("Joystick", [
+        ("Fitted", "Uses all six spare terminals, so nothing else can share them."),
+        ("Debounce", "Ignores the brief chatter a switch makes as it closes."),
+    ]),
+    ("WiFi", [
+        ("Enabled", "Makes the controller its own small network. Off means the radio is not on at all."),
+        ("Access PIN", "The password, exactly 8 digits. Change it from the default."),
+    ]),
+]
 
-    head = [P("#", S_KEY), P("Routine", S_KEY), P("Moves?", S_KEY), P("What it does", S_KEY)]
+
+def page2():
+    story = [Paragraph("Setting up a new machine", S_H2)]
+    story.append(P("Flash the firmware, then choose millimetres or inches with the measure key. The "
+                   "controller has to be told about your lathe before it can be accurate, and it "
+                   "can measure most of that itself. <b>Hold</b> the settings key, choose "
+                   "<b>Calibration</b>, press play, and work down this list — it begins with the "
+                   "routines that move nothing and ends with the one that deliberately stalls a "
+                   "motor.", S_BODY))
+    story.append(Spacer(1, 3))
+    head = [P("#", S_KEY), P("Routine", S_KEY), P("Does it move?", S_KEY), P("What it is for", S_KEY)]
     data = [head]
     for n, name, moves, what in SETUP:
-        colour = GOOD if moves == "no movement" else WARM
+        colour = GOOD if moves.startswith("nothing") else WARM
         data.append([P(n, S_CELL_B), P(name, S_CELL_B),
                      P("<font color='#%s'>%s</font>" % (colour.hexval()[2:], moves), S_CELL),
                      P(what, S_CELL)])
-    t = Table(data, colWidths=[7 * mm, 34 * mm, 24 * mm, None])
-    st = [
-        ("BACKGROUND", (0, 0), (-1, 0), INK),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.4),
-        ("BOX", (0, 0), (-1, -1), 0.6, LINE),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
-    ]
-    for i in range(1, len(data)):
-        if i % 2 == 0:
-            st.append(("BACKGROUND", (0, i), (-1, i), SOFT2))
-    t.setStyle(TableStyle(st))
-    story.append(t)
+    story.append(zebra(data, [7 * mm, 33 * mm, 26 * mm, None]))
     story.append(Spacer(1, 4))
-    story.append(P("Then back the settings up — there is no undo. Send <b>$</b> over USB to dump every "
-                   "setting as key=value lines, or download the same file from the web page. Paste the "
-                   "lines back to restore.", S_NOTE))
+    story.append(P("<b>Then save what you have done — there is no undo.</b> Connect a computer over "
+                   "USB, send a single <b>$</b>, and it prints every setting as a list of lines you "
+                   "can keep in a text file. Paste them back to restore. The same file can be "
+                   "downloaded from the web page.", S_NOTE))
     story.append(Spacer(1, 8))
 
-    story.append(Paragraph("Global settings", S_H2))
-    story.append(P("<b>Hold</b> the settings button to open the menu. These belong to the machine; "
-                   "anything belonging to an operation lives on that mode's own page — see page 1.", S_DIM))
+    story.append(Paragraph("Settings that describe your lathe", S_H2))
+    story.append(P("<b>Hold</b> the settings key to open the menu. Everything here describes the "
+                   "machine itself, and you will mostly set it once. Anything to do with one "
+                   "particular job — how many passes, how much clearance — lives on that job's own "
+                   "page instead, which is a <b>short</b> press of the same key.", S_DIM))
     story.append(Spacer(1, 3))
+    w = column_width()
+    story.append(two_columns(
+        stack([section_block(t, r, w) for t, r in SECTIONS]),
+        stack([section_block(t, r, w) for t, r in SECTIONS2])))
+    story.append(Spacer(1, 8))
 
-    avail = W - 2 * MARGIN
-    gap = 5 * mm
-    colw = (avail - gap) / 2.0
-    left = [SECTIONS[0], SECTIONS[1]]
-    right = [SECTIONS[2], SECTIONS[3], SECTIONS[4], SECTIONS[5]]
-
-    def stack(items):
-        out = []
-        for i, (title, rows) in enumerate(items):
-            out.append(section_block(title, rows, colw))
-            if i != len(items) - 1:
-                out.append(Spacer(1, 4))
-        return out
-
-    cols = Table([[stack(left), stack(right)]], colWidths=[colw, colw])
-    cols.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (0, 0), 0),
-        ("RIGHTPADDING", (0, 0), (0, 0), gap),
-        ("LEFTPADDING", (1, 0), (1, 0), 0),
-        ("RIGHTPADDING", (1, 0), (1, 0), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    story.append(cols)
-    story.append(Spacer(1, 9))
-
-    story.append(Paragraph("From a phone or laptop", S_H2))
+    story.append(Paragraph("Using it from a phone", S_H2))
     wifi = [
-        [P("1", S_CELL_B), P("Settings → WiFi and updates → <b>Enabled</b> = yes. Change the "
-                             "<b>Access PIN</b> from the default first: anyone who can join the "
-                             "network can reflash the machine.", S_CELL)],
-        [P("2", S_CELL_B), P("Join the <b>NanoEls-H4</b> network using that 8-digit PIN. The panel "
-                             "shows the address beside the Enabled setting.", S_CELL)],
-        [P("3", S_CELL_B), P("Open <b>192.168.4.1</b>. Every setting is editable, grouped as on the "
-                             "panel, with each mode's own settings shown too.", S_CELL)],
-        [P("4", S_CELL_B), P("The strip along the top is live: position, rpm, cutting speed, the "
-                             "constant-speed target, and the encoder <b>signal</b> figure. Leave it "
-                             "open through a job and check the low-water mark afterwards.", S_CELL)],
-        [P("5", S_CELL_B), P("<b>Derived figures</b> shows what your settings actually mean — step "
-                             "resolution, max feed, and the spindle rpm ceiling at the current pitch.", S_CELL)],
-        [P("6", S_CELL_B), P("Firmware updates upload from the same page. Refused unless the machine "
-                             "is stopped; the panel shows progress, not the browser.", S_CELL)],
+        [P("1", S_CELL_B), P("Settings &#8594; WiFi &#8594; <b>Enabled</b> = yes. Change the "
+                             "<b>Access PIN</b> from the default first — anyone who can join the "
+                             "network can change the machine's settings.", S_CELL)],
+        [P("2", S_CELL_B), P("Join the <b>NanoEls-H4</b> network with that PIN, then open "
+                             "<b>192.168.4.1</b>. The panel shows the address.", S_CELL)],
+        [P("3", S_CELL_B), P("Every setting is there, quicker to type than on the panel, with "
+                             "position and speed live. It also shows how clean the spindle sensor's "
+                             "signal is — leave it open through a job and check afterwards.", S_CELL)],
+        [P("4", S_CELL_B), P("New firmware installs from the same page, with no computer at the "
+                             "machine. Only while it is stopped.", S_CELL)],
     ]
-    tw = Table(wifi, colWidths=[7 * mm, None])
-    tw.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.4),
-        ("BACKGROUND", (0, 0), (-1, -1), SOFT),
-        ("BOX", (0, 0), (-1, -1), 0.6, LINE),
-        ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.white),
-    ]))
-    story.append(tw)
-    story.append(Spacer(1, 4))
-    story.append(P("Writes are refused while the machine is running, from the panel, USB and the "
-                   "browser alike — stop it first.", S_NOTE))
+    story.append(numbered(wifi))
     return story
 
 
 if __name__ == "__main__":
     import sys
-    build(sys.argv[1], "NanoEls H4  ·  Quick Reference",
+    build(sys.argv[1], "NanoEls H4  ·  Getting Started",
           [page1(), page2()],
-          ["Modes", "First-time setup and global settings"],
-          "Settings button: short press = this mode's page   ·   hold 0.5s = settings menu")
+          ["What it does, and how to ask for it", "Setting up your lathe"],
+          "Settings key: short press = this job's settings   ·   hold it for the main menu")
