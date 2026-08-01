@@ -130,7 +130,21 @@ A few notes for a new setup:
 
 ## Tests
 
-The arithmetic that decides whether a part comes out the right size - screw pitch correction, backlash and travel conversions, encoder PPR derivation, spindle angle wrapping, the RPM accumulator, pass sequencing, encoder signal quality, aux terminal conflicts, buzzer patterns, spindle indexing and surface speed - lives in headers with no Arduino dependencies. The firmware includes them and calls them directly, so the tests exercise the shipped code rather than a copy of it.
+Everything that can be decided without touching hardware lives in headers with no Arduino dependencies, and the firmware calls them directly - so the tests exercise the shipped code rather than a copy of it:
+
+| Header | Covers |
+|---|---|
+| `calibration_math.h` | screw pitch correction, backlash and travel conversions, encoder PPR, spindle angle, the RPM accumulator, derived figures |
+| `pass_math.h` | pass sequencing, depth per pass, flank infeed, peck retract, slotting |
+| `modes.h` | what each mode is, which stops it needs, which corner it starts from, how long its setup wizard is |
+| `mode_settings.h` | the per-operation values and the ranges that guard them |
+| `settings_table.h` | the menu's structure, storage keys and scoping |
+| `encoder_health.h` | the dead-band shapes and signal coherence |
+| `indexing.h` | spindle division, surface speed, the material table, metric/imperial |
+| `aux_pins.h` | which device may claim which auxiliary terminal |
+| `beeper.h` | the buzzer patterns |
+
+What is left in `h4.ino` is the part that talks to hardware - the display, the keypad, the step generator, Preferences, WiFi - and that is not covered. Testing it would mean mocking LiquidCrystal, FreeRTOS and NVS, which is a larger undertaking than the firmware.
 
 Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installed:
 
@@ -138,7 +152,7 @@ Run them on a PC with Visual Studio (or the standalone C++ Build Tools) installe
 .\test\run_tests.ps1
 ```
 
-No board required. The suite is 684 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
+No board required. The suite is 732 assertions and takes a second. `test/` is ignored by the Arduino build, so it doesn't affect the firmware.
 
 The web config page has its own suite, which extracts the JavaScript from `web_page.h` and runs it against a stubbed DOM. It's separate because it needs Node.js, and the C++ suite deliberately needs nothing but a compiler:
 

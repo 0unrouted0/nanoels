@@ -13,6 +13,7 @@
 #include "aux_pins.h"
 #include "indexing.h"
 #include "mode_settings.h"
+#include "modes.h"
 
 // Runtime copies of the machine_config.h defaults that the settings menu can change. The
 // constants there are only the starting point for a device that has never been configured.
@@ -124,20 +125,6 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define MOVE_STEP_IMP_2 2540 // 1/100"
 #define MOVE_STEP_IMP_3 254 // 1/1000" also known as 1 thou
 
-#define MODE_NORMAL 0
-#define MODE_XGEAR 1
-#define MODE_ASYNC 2
-#define MODE_CONE 3
-#define MODE_TURN 4
-#define MODE_FACE 5
-#define MODE_CUT 6
-#define MODE_THREAD 7
-#define MODE_ELLIPSE 8
-#define MODE_GCODE 9
-#define MODE_A1 10
-// 11 is left free: it is MODE_JOYSTICK on H5, which needs an analog stick this board doesn't have.
-#define MODE_SLOT 12
-#define MODE_TPR 13
 
 #define MEASURE_METRIC 0
 #define MEASURE_INCH 1
@@ -922,43 +909,15 @@ int printNoTrailing0(float value) {
   return lcd.print(value, points);
 }
 
-// Threading, straight or tapered. TPR is identical to THREAD everywhere except for one extra
-// setup step and the X drift applied during the cut, so almost everything asks this instead.
-bool isThreadMode() {
-  return mode == MODE_THREAD || mode == MODE_TPR;
-}
-
-// Spindle-synchronised continuous feed. Which axis it drives is the only difference between the
-// two: MODE_NORMAL feeds Z along the bed, MODE_XGEAR feeds X across the face.
-bool isGearboxMode() {
-  return mode == MODE_NORMAL || mode == MODE_XGEAR;
-}
-
-bool needZStops() {
-  return mode == MODE_TURN || mode == MODE_FACE || isThreadMode() || mode == MODE_ELLIPSE ||
-      mode == MODE_SLOT;
-}
-
-bool isPassMode() {
-  return mode == MODE_TURN || mode == MODE_FACE || mode == MODE_CUT || isThreadMode() ||
-      mode == MODE_ELLIPSE || mode == MODE_SLOT;
-}
-
-bool manualMovesAllowedWhenOn() {
-  return isGearboxMode() || mode == MODE_ASYNC || mode == MODE_CONE || mode == MODE_A1;
-}
-
-// How many questions the setup wizard asks before the next ON starts the machine. The last step
-// is always the "Go?" confirmation, so every mode ends the same way - cone used to return 2 here
-// while its display drew "Go?" at step 3, which meant the step never arrived and cone was the one
-// mode that began cutting straight off a question instead of a confirmation.
-int getLastSetupIndex() {
-  if (mode == MODE_GCODE) return 2; // program, spindle check
-  if (mode == MODE_CONE) return 3; // ratio, external/internal, go
-  if (mode == MODE_TPR) return 4; // passes, external/internal, taper ratio, go
-  if (isPassMode()) return 3; // passes, external/internal, go
-  return 0;
-}
+// All of these are one-line adaptors onto modes.h, which is where the answers live so the test
+// suite can reach them. They stay because the sketch reads them constantly and "isPassMode()" is
+// easier to follow at a call site than "modeIsPass(mode)".
+bool isThreadMode() { return modeIsThread(mode); }
+bool isGearboxMode() { return modeIsGearbox(mode); }
+bool needZStops() { return modeNeedsZStops(mode); }
+bool isPassMode() { return modeIsPass(mode); }
+bool manualMovesAllowedWhenOn() { return modeAllowsManualMovesWhenOn(mode); }
+int getLastSetupIndex() { return modeLastSetupIndex(mode); }
 
 // "2/3 " in front of a wizard question. Without it there is nothing to say the questions are a
 // sequence with an end rather than an unbounded interrogation, and no way to tell how far in you
@@ -971,63 +930,19 @@ int printSetupStep() {
 }
 
 Axis* getPitchAxis() {
-  return (mode == MODE_FACE || mode == MODE_XGEAR) ? &x : &z;
+  return modePitchOnX(mode) ? &x : &z;
 }
 
 long getPassModeZStart() {
-  if (mode == MODE_TURN || isThreadMode()) return dupr > 0 ? z.rightStop : z.leftStop;
-  if (mode == MODE_FACE) return auxForward ? z.rightStop : z.leftStop;
-  if (mode == MODE_ELLIPSE) return dupr > 0 ? z.leftStop : z.rightStop;
-  // Slotting always starts at the right and cuts to the left, like a shaper stroke.
-  if (mode == MODE_SLOT) return z.rightStop;
-  return z.pos;
+  return modeZStart(mode, z.leftStop, z.rightStop, z.pos, dupr, auxForward);
 }
 
 long getPassModeXStart() {
-  if (mode == MODE_TURN || isThreadMode()) return auxForward ? x.rightStop : x.leftStop;
-  if (mode == MODE_FACE || mode == MODE_CUT) return dupr > 0 ? x.rightStop : x.leftStop;
-  if (mode == MODE_ELLIPSE) return x.rightStop;
-  if (mode == MODE_SLOT) return auxForward ? x.rightStop : x.leftStop;
-  return x.pos;
+  return modeXStart(mode, x.leftStop, x.rightStop, x.pos, dupr, auxForward);
 }
 
-// Name of the current mode. MODE_NORMAL is the plain gearbox and shows nothing on the LCD, which
-// is why this can return an empty string. Shared with the web status API so the two never disagree
-// about what the machine is doing.
-const char* modeName() {
-  switch (mode) {
-    case MODE_XGEAR: return "XGEAR";
-    case MODE_SLOT: return "SLOT";
-    case MODE_TPR: return "TPR";
-    case MODE_ASYNC: return "ASY";
-    case MODE_CONE: return "CONE";
-    case MODE_TURN: return "TURN";
-    case MODE_FACE: return "FACE";
-    case MODE_CUT: return "CUT";
-    case MODE_THREAD: return "THRD";
-    case MODE_ELLIPSE: return "ELLI";
-    case MODE_GCODE: return "GCODE";
-    case MODE_A1: return "A1";
-    default: return "";
-  }
-}
-
-// Which set of per-mode settings a running mode uses. Modes with nothing of their own - the
-// gearbox, async, gcode, A1 - map to SMODE_NONE and simply keep the last loaded set, which they
-// never read.
-int settingModeOf(int m) {
-  switch (m) {
-    case MODE_TURN: return SMODE_TURN;
-    case MODE_FACE: return SMODE_FACE;
-    case MODE_CUT: return SMODE_CUT;
-    case MODE_THREAD: return SMODE_THREAD;
-    case MODE_TPR: return SMODE_TPR;
-    case MODE_ELLIPSE: return SMODE_ELLIPSE;
-    case MODE_SLOT: return SMODE_SLOT;
-    case MODE_CONE: return SMODE_CONE;
-    default: return SMODE_NONE;
-  }
-}
+const char* modeName() { return modeNameOf(mode); }
+int settingModeOf(int m) { return modeSettingsOf(m); }
 
 // Live set -> the mode's own copy, and back. Called either side of a mode change.
 void modeScopedStore(int sm) {
@@ -1087,11 +1002,7 @@ bool modeHasOwnScreen() {
   return settingModeCount(settingModeOf(mode)) > 0;
 }
 
-// Whether pressing the same button again would land on a different mode. Gear hides XGEAR and
-// thread hides TPR, and nothing on the panel says so - hence the marker.
-bool modeHasSibling() {
-  return mode == MODE_NORMAL || mode == MODE_THREAD;
-}
+bool modeHasSibling() { return modeHasSiblingOf(mode); }
 
 int printMode() {
   const char* name = modeName();

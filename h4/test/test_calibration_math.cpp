@@ -13,6 +13,7 @@
 #include "../aux_pins.h"
 #include "../indexing.h"
 #include "../mode_settings.h"
+#include "../modes.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -1259,6 +1260,134 @@ static void testSurfaceSpeed() {
   expectL("and that is the floor", cssDeviationPercent(100000, 1), -99);
 }
 
+// Everything the sketch asks about a mode. These are read all over it and a wrong answer is
+// quiet: a mode missing from needsZStops lets an operation start with no limits set, and a wrong
+// start corner sends the tool to the far end of the work before the first cut.
+static const int ALL_MODES[] = {
+  MODE_NORMAL, MODE_XGEAR, MODE_ASYNC, MODE_CONE, MODE_TURN, MODE_FACE, MODE_CUT,
+  MODE_THREAD, MODE_ELLIPSE, MODE_GCODE, MODE_A1, MODE_SLOT, MODE_TPR,
+};
+static const int ALL_MODES_COUNT = sizeof(ALL_MODES) / sizeof(ALL_MODES[0]);
+
+static void testModePredicates() {
+  group("what each mode is");
+  expectB("thread is a thread mode", modeIsThread(MODE_THREAD), true);
+  expectB("so is the tapered one", modeIsThread(MODE_TPR), true);
+  expectB("turning is not", modeIsThread(MODE_TURN), false);
+  expectB("the gearbox drives Z", modeIsGearbox(MODE_NORMAL), true);
+  expectB("and XGEAR is the same mode on X", modeIsGearbox(MODE_XGEAR), true);
+  expectB("async is not a gearbox - it is not spindle synced", modeIsGearbox(MODE_ASYNC), false);
+
+  // Anything that runs passes needs the wizard, and anything with a wizard runs passes - except
+  // cone and gcode, which have setup of their own without being pass modes.
+  bool wizardMatchesPasses = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    int m = ALL_MODES[i];
+    bool wizard = modeLastSetupIndex(m) > 0;
+    bool expected = modeIsPass(m) || m == MODE_CONE || m == MODE_GCODE;
+    if (wizard != expected) wizardMatchesPasses = false;
+  }
+  expectB("every mode that runs passes has a setup wizard", wizardMatchesPasses, true);
+
+  // Needing Z stops implies being a pass mode; parting is the one that runs passes on X alone.
+  bool zStopsSubset = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    int m = ALL_MODES[i];
+    if (modeNeedsZStops(m) && !modeIsPass(m)) zStopsSubset = false;
+  }
+  expectB("needing Z stops implies running passes", zStopsSubset, true);
+  expectB("parting runs passes without Z stops",
+      modeIsPass(MODE_CUT) && !modeNeedsZStops(MODE_CUT), true);
+
+  // Jogging while running is only safe where the axes are not being driven to a target.
+  bool jogSafe = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    int m = ALL_MODES[i];
+    if (modeAllowsManualMovesWhenOn(m) && modeIsPass(m)) jogSafe = false;
+  }
+  expectB("no pass mode allows jogging while it runs", jogSafe, true);
+
+  group("setup wizard length");
+  // Every mode with a wizard ends on the Go? confirmation. Cone returned 2 here while its display
+  // drew Go? at step 3, so the step never arrived and it began cutting straight off a question.
+  expectL("turning asks three", modeLastSetupIndex(MODE_TURN), 3);
+  expectL("facing asks three", modeLastSetupIndex(MODE_FACE), 3);
+  expectL("parting asks three", modeLastSetupIndex(MODE_CUT), 3);
+  expectL("threading asks three", modeLastSetupIndex(MODE_THREAD), 3);
+  expectL("the tapered thread asks a fourth for the taper", modeLastSetupIndex(MODE_TPR), 4);
+  expectL("cone asks three", modeLastSetupIndex(MODE_CONE), 3);
+  expectL("gcode asks two", modeLastSetupIndex(MODE_GCODE), 2);
+  expectL("the gearbox asks nothing", modeLastSetupIndex(MODE_NORMAL), 0);
+  expectL("nor does A1", modeLastSetupIndex(MODE_A1), 0);
+
+  group("mode names");
+  // The name shares line 0 with the on/off word, the limit glyphs and the step, so it has to stay
+  // short. Five is what the longest already is.
+  bool namesFit = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    if (strlen(modeNameOf(ALL_MODES[i])) > 5) namesFit = false;
+  }
+  expectB("mode names fit the top line", namesFit, true);
+  expectB("the plain gearbox shows nothing", modeNameOf(MODE_NORMAL)[0] == 0, true);
+  // ...which is why it needs the sibling marker, or the screen would say nothing at all about
+  // which of the two gearbox modes is selected.
+  expectB("but it does carry the sibling marker", modeHasSiblingOf(MODE_NORMAL), true);
+  expectB("as does thread, which hides TPR", modeHasSiblingOf(MODE_THREAD), true);
+  expectB("XGEAR does not - it is the sibling", modeHasSiblingOf(MODE_XGEAR), false);
+
+  group("which corner an operation starts from");
+  // leftStop is the larger coordinate on both axes - the convention throughout the firmware.
+  const long L = 100, R = 0, POS = 55;
+  expectL("turning a right-hand thread starts at the right", modeZStart(MODE_TURN, L, R, POS, 1, true), R);
+  expectL("a left-hand one starts at the left", modeZStart(MODE_TURN, L, R, POS, -1, true), L);
+  expectL("threading follows the same rule", modeZStart(MODE_THREAD, L, R, POS, 1, true), R);
+  expectL("and so does the tapered thread", modeZStart(MODE_TPR, L, R, POS, 1, true), R);
+  // Facing takes its direction from external/internal, not from the sign of the pitch - the pitch
+  // there is depth per revolution and says nothing about which way along the face it travels.
+  expectL("facing outward starts at the right", modeZStart(MODE_FACE, L, R, POS, 1, true), R);
+  expectL("facing inward starts at the left", modeZStart(MODE_FACE, L, R, POS, 1, false), L);
+  expectL("the ellipse starts opposite turning", modeZStart(MODE_ELLIPSE, L, R, POS, 1, true), L);
+  expectL("slotting always strokes from the right", modeZStart(MODE_SLOT, L, R, POS, 1, true), R);
+  expectL("slotting ignores the pitch sign", modeZStart(MODE_SLOT, L, R, POS, -1, false), R);
+  // A mode with no passes has no start corner, so it stays where it is rather than moving.
+  expectL("the gearbox does not move to a corner", modeZStart(MODE_NORMAL, L, R, POS, 1, true), POS);
+  expectL("nor does async", modeZStart(MODE_ASYNC, L, R, POS, 1, true), POS);
+
+  expectL("an external thread starts at the near X stop", modeXStart(MODE_TURN, L, R, POS, 1, true), R);
+  expectL("an internal one starts at the far side", modeXStart(MODE_TURN, L, R, POS, 1, false), L);
+  expectL("parting outside in", modeXStart(MODE_CUT, L, R, POS, 1, true), R);
+  expectL("parting inside out", modeXStart(MODE_CUT, L, R, POS, -1, true), L);
+  expectL("the gearbox stays put on X too", modeXStart(MODE_NORMAL, L, R, POS, 1, true), POS);
+
+  group("modes and their settings");
+  // A mode that runs passes must have a pass count to run, which means a settings group.
+  bool passModesHaveSettings = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    int m = ALL_MODES[i];
+    if (modeIsPass(m) && settingModeCount(modeSettingsOf(m)) < 1) passModesHaveSettings = false;
+  }
+  expectB("every pass mode has settings of its own", passModesHaveSettings, true);
+  expectL("the gearbox has none", modeSettingsOf(MODE_NORMAL), SMODE_NONE);
+  expectL("nor gcode", modeSettingsOf(MODE_GCODE), SMODE_NONE);
+  expectL("nor A1", modeSettingsOf(MODE_A1), SMODE_NONE);
+
+  // Two modes mapping to one settings group would have them silently sharing values, which is
+  // the whole thing this arrangement exists to prevent.
+  bool mappingUnique = true;
+  for (int i = 0; i < ALL_MODES_COUNT; i++) {
+    for (int j = i + 1; j < ALL_MODES_COUNT; j++) {
+      int a = modeSettingsOf(ALL_MODES[i]);
+      if (a == SMODE_NONE) continue;
+      if (a == modeSettingsOf(ALL_MODES[j])) mappingUnique = false;
+    }
+  }
+  expectB("no two modes share one settings group", mappingUnique, true);
+
+  expectB("the pitch drives X when facing", modePitchOnX(MODE_FACE), true);
+  expectB("and when cross-feeding", modePitchOnX(MODE_XGEAR), true);
+  expectB("but Z when turning", modePitchOnX(MODE_TURN), false);
+}
+
 // Per-mode settings: the values that used to be one global each, and the validation that guards
 // them. The ranges matter more than they look - a clearance of zero puts the tool back into the
 // work on the return stroke, and a pass count of zero is divided by.
@@ -1357,6 +1486,7 @@ int main() {
   testIndexing();
   testSurfaceSpeed();
   testModeSettings();
+  testModePredicates();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }
