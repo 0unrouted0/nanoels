@@ -4210,10 +4210,14 @@ void processSettingsKeypress(int keyCode) {
     return;
   }
   int digit = keyCodeToDigit(keyCode);
+  // Only items that take a typed value collect digits. On a toggle, a list or an action the
+  // numpad would fill up and the bottom line would offer to use a number the item cannot hold,
+  // while ON - which those items bind to something else - would ignore it and do that instead.
+  bool typed = !settingsIsToggle() && !settingIsList(settingsIndex) && !settingIsAction(settingsIndex);
   if (digit >= 0) {
-    numpadPress(digit);
+    if (typed) numpadPress(digit);
   } else if (keyCode == B_BACKSPACE) {
-    numpadBackspace();
+    if (typed) numpadBackspace();
   } else if (keyCode == B_UP) {
     settingsMove(-1);
   } else if (keyCode == B_DOWN) {

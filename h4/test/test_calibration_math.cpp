@@ -427,6 +427,31 @@ static void testSettingsTable() {
   }
   expectB("labels are present and fit the screen", labelsSane, true);
 
+  // Every row's kind has to be one the panel knows how to draw and edit. Adding a kind to the
+  // enum without teaching updateSettingsDisplay() and processSettingsKeypress() about it produces
+  // an item that shows a bare number and cannot be changed - visible on the web page, which falls
+  // back to a text box, but dead on the machine. This fails the build instead.
+  bool kindsHandled = true;
+  bool everyItemEditable = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    switch (SETTINGS[i].kind) {
+      case SETTING_AXIS_BOOL: case SETTING_AXIS_DU: case SETTING_AXIS_NUM:
+      case SETTING_GLOBAL_BOOL: case SETTING_GLOBAL_DU: case SETTING_GLOBAL_NUM:
+      case SETTING_GLOBAL_LIST: case SETTING_GLOBAL_SPEED: case SETTING_ACTION:
+        break;
+      default:
+        kindsHandled = false;
+    }
+    // Exactly one way to change each item: toggles and lists take ON or +/-, actions open a
+    // screen, everything else is typed. An item matching none of those cannot be edited at all.
+    int ways = (settingIsToggle(i) ? 1 : 0) + (settingIsList(i) ? 1 : 0) + (settingIsAction(i) ? 1 : 0)
+             + (settingUsesDu(i) ? 1 : 0) + (settingUsesSpeed(i) ? 1 : 0);
+    bool plainNumber = SETTINGS[i].kind == SETTING_AXIS_NUM || SETTINGS[i].kind == SETTING_GLOBAL_NUM;
+    if (ways != (plainNumber ? 0 : 1)) everyItemEditable = false;
+  }
+  expectB("every kind is one the panel can draw", kindsHandled, true);
+  expectB("every item has exactly one way to edit it", everyItemEditable, true);
+
   bool sectionNamesFit = true;
   for (int s = 0; s < SECTION_COUNT; s++) {
     if (SECTION_NAMES[s] == 0 || strlen(SECTION_NAMES[s]) == 0) sectionNamesFit = false;
