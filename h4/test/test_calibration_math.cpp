@@ -352,7 +352,7 @@ static void testDerivedFigures() {
 
 static void testSettingsTable() {
   group("settings table");
-  expectL("item count", SETTINGS_COUNT, 68);
+  expectL("item count", SETTINGS_COUNT, 73);
   expectL("section count", (int)SECTION_COUNT, 9);
 
   // Navigating a section is a first index and a count, which only works if a section's items
@@ -388,17 +388,18 @@ static void testSettingsTable() {
   bool unitsFit = true;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
     const char* u = SETTINGS[i].unit;
-    if ((settingIsToggle(i) || settingIsAction(i) || settingUsesDu(i)) && u != 0) unitsPlaced = false;
+    if ((settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i)) && u != 0) unitsPlaced = false;
     if (u != 0 && (strlen(u) > 8 || u[0] == 0 || u[0] == ' ')) unitsFit = false;
   }
   expectB("only measurable items carry a unit", unitsPlaced, true);
   expectB("units are short enough for the LCD", unitsFit, true);
 
   // Every plain number should say what it is counting. The WiFi PIN is the one real exception:
-  // it is a code, not a quantity.
+  // it is a code, not a quantity. A list is not a quantity either - its value is shown as a name,
+  // so it belongs with the toggles rather than here.
   int unitless = 0;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
-    if (settingIsToggle(i) || settingIsAction(i) || settingUsesDu(i)) continue;
+    if (settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i)) continue;
     if (SETTINGS[i].unit == 0) unitless++;
   }
   expectL("only the PIN is a number without a unit", unitless, 1);
@@ -522,7 +523,7 @@ static void testSettingsTable() {
   expectB("the last item is the calibration action", settingIsAction(SETTINGS_COUNT - 1), true);
   // Preferences is what the directory opens on, so it has to be the first section.
   expectL("preferences comes first", (int)SEC_PREFS, 0);
-  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 13);
+  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 16);
 }
 
 static void testSlotting() {
@@ -1015,6 +1016,43 @@ static void testSurfaceSpeed() {
   expectL("over the ceiling is capped", cssCappedRpm(5000, 2000), 2000);
   expectL("no ceiling means no cap", cssCappedRpm(5000, 0), 5000);
 
+  group("cutting speed by material");
+  // Manual is index 0 and means "use the number I typed", which is what lets one setting cover
+  // both sources instead of needing a separate mode.
+  expectL("manual uses the typed figure", cssSpeedFor(0, true, 140), 140);
+  expectL("manual ignores the tool", cssSpeedFor(0, false, 140), 140);
+  expectL("a negative manual figure reads as off", cssSpeedFor(0, true, -5), 0);
+  // Out of range must fall back to the manual figure rather than reading off the end of the table.
+  expectL("an unknown material falls back", cssSpeedFor(999, true, 140), 140);
+  expectL("a negative material falls back", cssSpeedFor(-1, true, 140), 140);
+
+  // A material overrides the typed figure entirely, and carbide runs faster than HSS in every
+  // entry - if that ever inverts, the table has been mistyped.
+  expectB("a material overrides the manual figure", cssSpeedFor(6, true, 140) != 140, true);
+  bool carbideAlwaysFaster = true;
+  bool namesFit = true;
+  for (int m = 1; m < materialCount(); m++) {
+    const MaterialPreset* p = materialAt(m);
+    if (p->carbide <= p->hss) carbideAlwaysFaster = false;
+    if (strlen(p->name) > 12 || p->name[0] == 0) namesFit = false;
+    checks++;
+    if (p->hss > 0 && p->carbide > 0) continue;
+    failures++;
+    printf("  FAIL %s has a zero speed\n", p->name);
+  }
+  printf("  ok   every material carries a speed for both tools\n");
+  expectB("carbide is faster than HSS throughout", carbideAlwaysFaster, true);
+  expectB("names fit the LCD value line", namesFit, true);
+  expectL("mild steel with carbide", cssSpeedFor(6, true, 0), 120);
+  expectL("mild steel with HSS", cssSpeedFor(6, false, 0), 30);
+
+  // The whole point: material plus diameter gives an rpm without the operator looking anything up.
+  // Mild steel, carbide, 50mm stock -> 120 m/min -> 764 rpm.
+  expectL("mild steel on 50mm stock", cssTargetRpm(500000, cssSpeedFor(6, true, 0)), 764);
+
+  expectL("out of range names do not crash", (long) strlen(materialName(999)), (long) strlen(materialName(0)));
+
+  group("constant surface speed");
   expectL("on target reads zero", cssDeviationPercent(600, 600), 0);
   expectL("too fast reads positive", cssDeviationPercent(600, 900), 50);
   expectL("too slow reads negative", cssDeviationPercent(600, 300), -50);

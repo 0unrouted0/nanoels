@@ -187,12 +187,12 @@ Press the settings button when the controller is `off` to open the settings menu
 
 | # | Section | Holds |
 |---|---|---|
-| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel, spindle divisions, surface speed |
+| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel, spindle divisions, constant cutting speed |
 | 2 | Z axis | direction, backlash, screw pitch, motor steps, pulley teeth, speeds, acceleration, max travel |
 | 3 | X axis | as Z |
 | 4 | A1 axis | as Z, plus whether it's fitted and whether it's rotary |
 | 5 | Spindle encoder | PPR, direction, pulley teeth, divider, dead-band and its shape, glitch filter |
-| 6 | Handwheels | which are fitted, direction, PPR, pulse width, dead-band |
+| 6 | Handwheels | which are fitted, which axis each drives, direction, PPR, pulse width, dead-band |
 | 7 | Joystick | fitted, debounce |
 | 8 | WiFi & updates | radio on/off, access PIN — see [WIFI.md](WIFI.md) |
 | 9 | Calibration | opens the guided measuring routines described below |
@@ -297,11 +297,11 @@ When in threading mode and `off`, press the settings button to open the thread d
 
 Press the display button to cycle the extra readouts: spindle angle, then RPM with surface speed (e.g. `1250rpm 98m/min`), then the large position display, then off. Surface speed shows the current cutting speed in m/min (or ft/min in inch and TPI modes) calculated from the spindle RPM and the tool diameter position. For accurate readings, X must be zeroed on the lathe centerline - see "Zeroing the axes" below.
 
-### Constant surface speed
+### Constant cutting speed
 
 Cutting speed is what the tool actually feels, and it falls with diameter. The RPM that's right on 50mm stock gives a third of the speed on 16mm, and facing towards centre takes it to zero — which is why the finish goes off as you approach the middle of a faced surface.
 
-Set **Surface speed** in Preferences to your target in m/min and the RPM readout changes from showing what the speed *is* to showing what the spindle *should be doing*:
+Turn **Constant speed** on in Preferences and the RPM readout changes from showing what the speed *is* to showing what the spindle *should be doing*:
 
 ```
 850rpm >620 +37%
@@ -311,7 +311,31 @@ Set **Surface speed** in Preferences to your target in m/min and the RPM readout
 
 `^` in place of `>` means the target is above **Spindle max rpm** and has been capped — the lathe can't reach the speed this diameter wants, which is normal on small diameters and not a fault.
 
-Starting points with carbide: 30 m/min for tool steel, 100 for mild steel, 200 for aluminium, 60 for cast iron. High speed steel wants roughly a third of those. Set it to 0 to go back to the plain surface speed readout.
+**Constant speed** is the only item you need to touch to turn the whole thing on or off. The three below it keep their values while it's off, so switching back on returns to the setup you had.
+
+#### Picking the speed
+
+Set **Material** and **Tool** and the speed is looked up for you:
+
+| Material | HSS | Carbide |
+|---|---:|---:|
+| Aluminium | 70 | 200 |
+| Brass | 60 | 180 |
+| Bronze | 40 | 120 |
+| Copper | 50 | 150 |
+| Cast iron | 25 | 90 |
+| Mild steel | 30 | 120 |
+| Alloy steel | 20 | 90 |
+| Tool steel | 15 | 60 |
+| Stainless | 15 | 60 |
+| Titanium | 10 | 40 |
+| Plastic | 100 | 250 |
+
+All in m/min. Press **+** or **−** on the Material item to step through the list; the name is shown rather than a number. The web page shows the same list as a dropdown.
+
+These are conservative starting points for turning, not gospel — the right speed also depends on depth of cut, feed, how rigid the setup is, and whether there's coolant. They're here so the machine can suggest something sane rather than leave you a number with no way to pick it. Treat them as a safe first cut and adjust from what the chip and the finish tell you.
+
+Set **Material** to `Manual` to use the **Manual speed** figure instead. That's the one to use for a material that isn't listed, or when you've worked out what a particular job actually wants.
 
 **The controller can't set the speed for you.** There's no spindle output on this board and no free pin for one — every terminal is taken by the steppers, encoder, display and keypad. This tells you what to dial and you dial it.
 

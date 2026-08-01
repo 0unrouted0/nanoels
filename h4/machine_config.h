@@ -142,14 +142,30 @@ const int INDEX_DIVISIONS = 0;
 // at best, whatever the encoder can resolve.
 const int INDEX_TOLERANCE_TENTHS_DEG = 5; // 0.5 degrees
 
-// Target cutting speed in metres per minute, for the constant surface speed readout. 0 is off.
-// Typical starting points with carbide: 30 for tool steel, 100 for mild steel, 200 for aluminium,
-// 60 for cast iron. High speed steel wants roughly a third of those.
+// Constant cutting speed. When on, the rpm readout stops showing the surface speed you have and
+// starts showing the rpm you want at the current diameter, and how far off you are.
 //
 // The controller has no spindle output - there is no free pin for one - so this tells you what the
 // spindle should be doing and you turn the dial. It matters most when facing, where the diameter
 // runs to zero and the correct speed runs to infinity.
-const int SURFACE_SPEED_M_PER_MIN = 0;
+const bool CSS_ENABLED = false;
+
+// Which material to take the speed from - an index into the table in indexing.h:
+//
+//   0 Manual       4 Copper       8 Tool steel
+//   1 Aluminium    5 Cast iron    9 Stainless
+//   2 Brass        6 Mild steel  10 Titanium
+//   3 Bronze       7 Alloy steel 11 Plastic
+//
+// 0 means use SURFACE_SPEED_M_PER_MIN below instead of a material.
+const int CSS_MATERIAL = 0;
+
+// Which tool the material speeds are read for. Carbide runs roughly three times a high speed
+// steel tool, so this matters more than the material choice does.
+const bool CSS_CARBIDE = true;
+
+// Target cutting speed in metres per minute, used when the material is set to Manual.
+const int SURFACE_SPEED_M_PER_MIN = 100;
 
 // Highest speed your lathe can actually reach, so a target it cannot meet is reported as capped
 // rather than as an rpm nobody can dial in. 0 means do not cap.

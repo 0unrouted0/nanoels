@@ -72,6 +72,62 @@ inline bool indexOnMark(long errCounts, long tolCounts) {
 // the dial. Keeping the target in one function means a VFD output could drive it later without any
 // of the arithmetic moving.
 
+// Cutting speeds by material and tool, in metres per minute.
+//
+// These are conservative starting points for turning, not gospel: the right speed also depends on
+// depth of cut, feed, rigidity, whether there is coolant, and how the particular alloy behaves.
+// They are here so the machine can suggest something sane rather than leave a number nobody knows
+// how to pick, and every one of them is a figure a machinist would recognise as a safe first cut.
+//
+// Index 0 is Manual, which means "use the number I typed" rather than a material at all. Keeping
+// it in the same list is what lets one setting cover both, so nothing has to explain which of two
+// speed sources is in charge.
+struct MaterialPreset {
+  const char* name;   // at most 12 characters, to fit "Now " and the name on a 20-column line
+  int hss;            // m/min with a high speed steel tool
+  int carbide;        // m/min with carbide
+};
+
+inline int materialCount() {
+  return 12;
+}
+
+inline const MaterialPreset* materialAt(int index) {
+  static const MaterialPreset materials[12] = {
+    {"Manual",       0,   0},
+    {"Aluminium",    70,  200},
+    {"Brass",        60,  180},
+    {"Bronze",       40,  120},
+    {"Copper",       50,  150},
+    {"Cast iron",    25,  90},
+    {"Mild steel",   30,  120},
+    {"Alloy steel",  20,  90},
+    {"Tool steel",   15,  60},
+    {"Stainless",    15,  60},
+    {"Titanium",     10,  40},
+    {"Plastic",      100, 250},
+  };
+  if (index < 0 || index >= 12) {
+    return &materials[0];
+  }
+  return &materials[index];
+}
+
+inline const char* materialName(int index) {
+  return materialAt(index)->name;
+}
+
+// The surface speed actually in force: the material's figure for the fitted tool, or the typed
+// number when the material is Manual. One function so the display, the web status and anything
+// added later cannot disagree about which source wins.
+inline long cssSpeedFor(int material, bool carbide, long manualMPerMin) {
+  if (material <= 0 || material >= materialCount()) {
+    return manualMPerMin < 0 ? 0 : manualMPerMin;
+  }
+  const MaterialPreset* m = materialAt(material);
+  return carbide ? m->carbide : m->hss;
+}
+
 // Spindle rpm that gives this surface speed at this diameter.
 //
 //   rpm = 1000 * v / (pi * d)      v in m/min, d in mm

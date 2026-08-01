@@ -21,6 +21,7 @@ enum SettingKind {
   SETTING_GLOBAL_BOOL, // global on/off, toggled with ON
   SETTING_GLOBAL_DU,   // global distance
   SETTING_GLOBAL_NUM,  // global plain number
+  SETTING_GLOBAL_LIST, // global choice from a named list, stored as its index
   SETTING_ACTION,      // not a value at all: ON opens another screen
 };
 
@@ -82,11 +83,20 @@ const SettingDesc SETTINGS[] = {
   {"Slot left reduction", SETTING_GLOBAL_DU,   "slt",  SEC_PREFS, SAX_NONE, 0, 0, 0},
   {"Manual step time",    SETTING_GLOBAL_NUM,  "stm",  SEC_PREFS, SAX_NONE, 0, 0, "ms"},
   {"Step rest",           SETTING_GLOBAL_NUM,  "sdl",  SEC_PREFS, SAX_NONE, 0, 0, "ms"},
-  // Both replace the angle line on the main screen when switched on, so they share its space and
-  // only one can be shown at a time - indexing wins, being the one you act on immediately.
+  // Indexing replaces the angle line on the main screen, constant speed replaces the tacho line.
   {"Spindle divisions",   SETTING_GLOBAL_NUM,  "idiv", SEC_PREFS, SAX_NONE, 0, 0, "marks"},
   {"Index tolerance",     SETTING_GLOBAL_NUM,  "itol", SEC_PREFS, SAX_NONE, 0, 0, "0.1deg"},
-  {"Surface speed",       SETTING_GLOBAL_NUM,  "css",  SEC_PREFS, SAX_NONE, 0, 0, "m/min"},
+
+  // Constant cutting speed. The switch comes first and is the only thing that has to be touched
+  // to turn the whole feature off - the three items under it keep their values while it is off,
+  // so switching back on returns to the setup you had rather than to nothing.
+  //
+  // Material picks the speed from a table for the fitted tool; Manual means use the typed figure
+  // instead, which is why it sits in the same list rather than being a separate mode.
+  {"Constant speed",      SETTING_GLOBAL_BOOL, "cson", SEC_PREFS, SAX_NONE, "on", "off", 0},
+  {"Material",            SETTING_GLOBAL_LIST, "cmat", SEC_PREFS, SAX_NONE, 0, 0, 0},
+  {"Tool",                SETTING_GLOBAL_BOOL, "ctol", SEC_PREFS, SAX_NONE, "carbide", "HSS", 0},
+  {"Manual speed",        SETTING_GLOBAL_NUM,  "css",  SEC_PREFS, SAX_NONE, 0, 0, "m/min"},
   {"Spindle max rpm",     SETTING_GLOBAL_NUM,  "smax", SEC_PREFS, SAX_NONE, 0, 0, "rpm"},
 
   // -- Z axis -------------------------------------------------------------
@@ -151,8 +161,10 @@ const SettingDesc SETTINGS[] = {
   // joystick, so switching one on is refused while another device holds the pins. Interrupts are
   // attached and released as these change - see aux_pins.h.
   {"Fitted 1",           SETTING_GLOBAL_BOOL, "p1u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
+  {"Drives 1",           SETTING_GLOBAL_BOOL, "p1a",  SEC_HANDWHEEL, SAX_NONE, "X", "Z", 0},
   {"Invert 1",           SETTING_GLOBAL_BOOL, "p1i",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
   {"Fitted 2",           SETTING_GLOBAL_BOOL, "p2u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
+  {"Drives 2",           SETTING_GLOBAL_BOOL, "p2a",  SEC_HANDWHEEL, SAX_NONE, "X", "Z", 0},
   {"Invert 2",           SETTING_GLOBAL_BOOL, "p2i",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
   {"Pulses per rev",     SETTING_GLOBAL_NUM,  "hppr", SEC_HANDWHEEL, SAX_NONE, 0, 0, "pulses"},
   {"Min pulse width",    SETTING_GLOBAL_NUM,  "pmw",  SEC_HANDWHEEL, SAX_NONE, 0, 0, "us"},
@@ -225,6 +237,14 @@ inline bool settingIsToggle(int index) {
 // Whether ON opens another screen rather than committing a typed value.
 inline bool settingIsAction(int index) {
   return SETTINGS[index].kind == SETTING_ACTION;
+}
+
+// Whether the item is a choice from a named list. Stored and typed as a plain index, so nothing
+// about persistence or the wire format changes - only how the value is shown, and that the arrow
+// keys step through it. The names themselves live with the thing they describe rather than in
+// this table, which has no room for a list per row.
+inline bool settingIsList(int index) {
+  return SETTINGS[index].kind == SETTING_GLOBAL_LIST;
 }
 
 // Index of a section's first item, or -1 if it has none.

@@ -53,6 +53,11 @@ input[type=text]{width:7.5rem;padding:.4rem .5rem;text-align:right;
   font:inherit;font-variant-numeric:tabular-nums;
   background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:.35rem}
 input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+/* Same footprint as the text box and the toggle, so every row's control lines up in one column. */
+select{width:7.5rem;padding:.4rem .5rem;font:inherit;
+  background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:.35rem}
+select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.row.dirty select{border-color:var(--accent)}
 button{font:inherit;cursor:pointer;border-radius:.35rem;border:1px solid var(--line);
   background:var(--bg);color:var(--ink);padding:.4rem .8rem}
 button:hover{border-color:var(--accent)}
@@ -228,6 +233,30 @@ function makeRow(item){
     var pad = document.createElement("span");
     pad.className = "unit";
     row.appendChild(pad);
+    return row;
+  }
+
+  if(item.kind === "list"){
+    var sel = document.createElement("select");
+    (item.options || []).forEach(function(name, i){
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = name;
+      sel.appendChild(o);
+    });
+    item.paint = function(){
+      sel.value = String(item.pending !== undefined ? item.pending : item.value);
+    };
+    item.paint();
+    sel.onchange = function(){
+      item.pending = parseInt(sel.value, 10);
+      clearError(row);
+      refreshBar();
+    };
+    row.appendChild(sel);
+    var listPad = document.createElement("span");
+    listPad.className = "unit";
+    row.appendChild(listPad);
     return row;
   }
 
