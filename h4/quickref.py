@@ -7,7 +7,68 @@
 #
 # Style and machinery are in refsheet.py.  python quickref.py QUICKREF.pdf
 
+import os
+import re
+
 from refsheet import *
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------------------
+# Reference data, read out of the firmware itself
+# ---------------------------------------------------------------------------
+# Parsed at build time rather than copied, so the sheet cannot quietly disagree with the machine.
+# Distances in the firmware are deci-microns: ten-thousandths of a millimetre.
+
+def read_threads():
+    src = open(os.path.join(HERE, "h4.ino"), encoding="utf-8", errors="replace").read()
+    block = re.search(r"const ThreadPreset THREAD_PRESETS\[\] = \{(.*?)\n\};", src, re.S)
+    out = []
+    for name, du, measure in re.findall(r'\{"([^"]+)",\s*(\d+),\s*(MEASURE_\w+)\}', block.group(1)):
+        out.append((name, int(du) / 10000.0, measure == "MEASURE_METRIC"))
+    return out
+
+
+def read_materials():
+    src = open(os.path.join(HERE, "indexing.h"), encoding="utf-8", errors="replace").read()
+    block = re.search(r"static const MaterialPreset materials\[\d+\] = \{(.*?)\n  \};", src, re.S)
+    out = []
+    for name, hss, carbide in re.findall(r'\{"([^"]+)",\s*(\d+),\s*(\d+)\}', block.group(1)):
+        if name == "Manual":
+            continue
+        out.append((name, int(hss), int(carbide)))
+    return out
+
+
+# Thread depth on the radius, by form. The included angle decides it: 60 degrees for metric and
+# Unified, 55 for Whitworth-form BSPP, and the flat-topped forms are half the pitch plus a
+# clearance. NPT is a truncated 60 degree thread and deeper than it looks.
+FORMS = [
+    ("NPT", "60&#176; taper", lambda p: 0.800 * p),
+    ("ACME", "29&#176;", lambda p: 0.5 * p + 0.254),
+    ("Tr", "30&#176;", lambda p: 0.5 * p + 0.25),
+    ("BSPP", "55&#176;", lambda p: 0.6403 * p),
+    ("UN", "60&#176;", lambda p: 0.6134 * p),
+    ("M", "60&#176;", lambda p: 0.6134 * p),
+]
+
+FAMILY_NAMES = {
+    "M": "Metric",
+    "UN": "Unified  ·  UNC and UNF",
+    "BSPP": "British parallel pipe",
+    "Tr": "Trapezoidal",
+    "ACME": "ACME",
+    "NPT": "American taper pipe",
+}
+
+
+def thread_form(name):
+    """Which form a preset belongs to. Order matters - ACME contains an M."""
+    for key, angle, depth in FORMS:
+        if key in name:
+            return key, angle, depth
+    return "M", "60&#176;", FORMS[-1][2]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +383,121 @@ def page2():
     story.append(two_columns(
         stack([section_block(t, r, w) for t, r in SECTIONS]),
         stack([section_block(t, r, w) for t, r in SECTIONS2])))
+    return story
+
+
+# ---------------------------------------------------------------------------
+# Page 3 - the tables worth having at the machine
+# ---------------------------------------------------------------------------
+
+def thread_columns():
+    """The whole thread list, grouped by form, split into three balanced columns."""
+    threads = read_threads()
+    families = []
+    for key in ("M", "UN", "BSPP", "Tr", "ACME", "NPT"):
+        rows = [(n, p, m) for (n, p, m) in threads if thread_form(n)[0] == key]
+        if rows:
+            families.append((key, rows))
+
+    # Balance by row count, keeping each family whole.
+    total = sum(len(r) + 1 for _, r in families)
+    target = total / 3.0
+    cols, cur, used = [], [], 0
+    for key, rows in families:
+        if used and used + len(rows) + 1 > target and len(cols) < 2:
+            cols.append(cur)
+            cur, used = [], 0
+        cur.append((key, rows))
+        used += len(rows) + 1
+    cols.append(cur)
+    while len(cols) < 3:
+        cols.append([])
+
+    out = []
+    for col in cols:
+        data = [[P("Thread", S_KEY), P("Pitch", S_KEY), P("Depth", S_KEY)]]
+        spans = []
+        for key, rows in col:
+            spans.append(len(data))
+            data.append([P(FAMILY_NAMES[key] + "  &#183;  " + thread_form(rows[0][0])[1], S_CELL_B),
+                         "", ""])
+            for name, pitch, metric in rows:
+                _, _, depth = thread_form(name)
+                shown = "%.2fmm" % pitch if metric else "%dtpi" % round(25.4 / pitch)
+                data.append([P(name, S_CELL), P(shown, S_CELL),
+                             P("%.2f" % depth(pitch), S_CELL)])
+        t = Table(data, colWidths=[None, 13 * mm, 10 * mm])
+        st = [
+            ("BACKGROUND", (0, 0), (-1, 0), INK),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+            ("BOX", (0, 0), (-1, -1), 0.6, LINE),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.4, LINE),
+        ]
+        for r in spans:
+            st.append(("SPAN", (0, r), (-1, r)))
+            st.append(("BACKGROUND", (0, r), (-1, r), SOFT))
+            st.append(("LINEABOVE", (0, r), (-1, r), 0.4, LINE))
+        t.setStyle(TableStyle(st))
+        out.append(t)
+    return out
+
+
+def page3():
+    story = [Paragraph("Every thread it knows", S_H2)]
+    story.append(P("Choose one from the machine and the feed is set for you. <b>Depth</b> is how far "
+                   "in from the surface the tool has to go, in millimetres, measured on the radius "
+                   "— that is what the up limit is for, and it is the one thing the controller "
+                   "cannot work out for itself. If the cross slide is set to read diameters, put in "
+                   "twice the figure shown.", S_BODY))
+    story.append(Spacer(1, 3))
+
+    cols = thread_columns()
+    gap = 4 * mm
+    colw = (W - 2 * MARGIN - 2 * gap) / 3.0
+    t = Table([cols], colWidths=[colw, colw, colw])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (1, 0), gap),
+        ("RIGHTPADDING", (2, 0), (2, 0), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 4))
+    story.append(P("Depths are for a full-form thread on the outside of a bar. An internal thread "
+                   "is cut to the same depth outwards from the bore. Trapezoidal and ACME include "
+                   "the usual root clearance; taper pipe threads are deeper than they look because "
+                   "the form is truncated rather than pointed.", S_DIM))
+    story.append(Spacer(1, 8))
+
+    mats = read_materials()
+    story.append(Paragraph("Cutting speeds", S_H2))
+    story.append(P("Metres per minute at the surface of the work — what the controller uses when "
+                   "you switch the cutting-speed helper on. Conservative starting points for "
+                   "turning, not limits: depth of cut, how rigid the setup is and whether you are "
+                   "using coolant all matter too. Work up from these if the finish and the swarf "
+                   "look happy.", S_BODY))
+    story.append(Spacer(1, 3))
+
+    half = (len(mats) + 1) // 2
+    tables = []
+    for chunk in (mats[:half], mats[half:]):
+        data = [[P("Material", S_KEY), P("HSS", S_KEY), P("Carbide", S_KEY)]]
+        for name, hss, carbide in chunk:
+            data.append([P(name, S_CELL_B), P("%d m/min" % hss, S_CELL),
+                         P("%d m/min" % carbide, S_CELL)])
+        tables.append(zebra(data, [None, 20 * mm, 20 * mm]))
+    story.append(two_columns(tables[0], tables[1]))
+    story.append(Spacer(1, 4))
+    story.append(P("<b>Turning it into a spindle speed:</b> rpm = 318 &#215; speed &#247; diameter "
+                   "in mm. So mild steel with carbide at 120 m/min on a 40mm bar wants about 950 "
+                   "rpm. The controller does this for you and keeps doing it as the diameter "
+                   "changes, which is what makes it useful when facing towards the centre.", S_NOTE))
     story.append(Spacer(1, 8))
 
     story.append(Paragraph("Using it from a phone", S_H2))
@@ -344,6 +520,7 @@ def page2():
 if __name__ == "__main__":
     import sys
     build(sys.argv[1], "NanoEls H4  ·  Getting Started",
-          [page1(), page2()],
-          ["What it does, and how to ask for it", "Setting up your lathe"],
+          [page1(), page2(), page3()],
+          ["What it does, and how to ask for it", "Setting up your lathe",
+           "Threads, cutting speeds and the web page"],
           "Settings key: short press = this job's settings   ·   hold it for the main menu")
