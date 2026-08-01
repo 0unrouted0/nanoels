@@ -191,15 +191,13 @@ Use numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/51791
 
 The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
 
-**Hold it for half a second to open the settings menu.** A short press opens whatever screen the current mode claims for itself - in threading that's the [thread database](#thread-database), and in every other mode it's the settings menu too, since nothing else has claimed it yet.
-
-That split exists so a mode can have a screen of its own without losing the route to the settings menu. Threading previously took the short press for its database and left no way to reach settings at all without leaving the mode, which mattered because spring passes and flank infeed - both threading settings - live there.
+**Hold it for half a second to open the settings menu.** A short press opens the current mode's own page - see [per-mode settings](#per-mode-settings) below. Modes that have no settings of their own open the settings menu either way.
 
 Press the settings button when the controller is `off` to open the settings menu. It opens on a directory of sections; move with the arrows and press play to enter one, and press stop to come back out.
 
 | # | Section | Holds |
 |---|---|---|
-| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel, spindle divisions, constant cutting speed |
+| 1 | Preferences | X readout, retract distance, manual step feel, spindle divisions, constant cutting speed |
 | 2 | Z axis | direction, backlash, screw pitch, motor steps, pulley teeth, speeds, acceleration, max travel |
 | 3 | X axis | as Z |
 | 4 | A1 axis | as Z, plus whether it's fitted and whether it's rotary |
@@ -216,6 +214,30 @@ Every value shows its unit next to it, both on the screen and in the web interfa
 Distances (backlash, screw pitch) are entered in microns when in metric mode or thousandths of an inch when in inch mode. Speed and acceleration are entered in motor steps per second and steps per second squared - same units as the constants at the top of `h4.ino`. Press the settings button or off button to exit.
 
 After changing screw pitch or motor steps, re-zero the axes since the physical meaning of the stored positions changes.
+
+### Per-mode settings
+
+Spring passes, pass count, clearance and the rest are not properties of the machine — they're properties of the operation. Three spring passes suit a thread and are a waste on a facing cut, and until now those were the same stored number.
+
+**Each mode keeps its own.** A short press of the settings button opens the page for whichever mode is selected:
+
+| Mode | Its settings |
+|---|---|
+| Turning | passes, spring passes, clearance |
+| Facing | passes, spring passes, clearance |
+| Parting | passes, peck depth, clearance |
+| Threading | passes, spring passes, flank infeed, clearance, thread database |
+| Tapered thread | as threading |
+| Ellipse | passes |
+| Slotting | passes, left reduction |
+
+Set threading to 6 passes with 2 spring passes and turning to 3 with none, and each keeps its own from then on — switching modes swaps them over. Stop returns you to the machine screen rather than to the settings directory, since the mode page isn't part of it.
+
+The gearbox, async, GCode and A1 modes have nothing of their own, so the settings button opens the settings menu whether you hold it or not.
+
+The web page shows every mode's settings at once, grouped under the same headings, since a browser has the room the panel doesn't.
+
+**On upgrading:** each mode starts with whatever the old single global value was, so nothing changes until you start tuning them apart.
 
 ### Belt-driven axes
 

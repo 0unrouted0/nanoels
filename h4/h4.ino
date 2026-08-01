@@ -578,6 +578,21 @@ long settingsLcdHash = LCD_HASH_INITIAL; // Hash of the currently drawn settings
 // The menu items, their labels and their kinds live in settings_table.h, which also defines
 // SETTINGS_COUNT. Only reading and writing the underlying variable is per-item code below.
 
+// Settings that belong to the operation rather than to the machine. Each mode keeps its own copy
+// in these arrays; the plain variables below are the live set for whichever mode is selected, and
+// are what every motion and display path reads. Changing mode writes the live set back to the
+// mode being left and loads the one being entered.
+//
+// The alternative was to make every reader index by mode, which would have touched the motion
+// code in dozens of places to fix a storage problem.
+long modePasses[SMODE_COUNT];
+long modeSpringPasses[SMODE_COUNT];
+long modeClearanceDu[SMODE_COUNT];
+long modePeckDu[SMODE_COUNT];
+bool modeFlankInfeed[SMODE_COUNT];
+long modeSlotReductionDu[SMODE_COUNT];
+bool modeScopedLoaded = false; // False until the arrays have been read from Preferences
+
 long springPasses = 0; // Extra passes at final depth in turn/face/thread modes, 0 = off
 long peckDepthDu = 0; // Peck parting: back off to break the chip every this much infeed in cut-off mode, 0 = off
 bool flankInfeed = false; // Whether threading passes use 29.5-degree flank infeed instead of plunging
@@ -997,6 +1012,102 @@ const char* modeName() {
   }
 }
 
+// Which set of per-mode settings a running mode uses. Modes with nothing of their own - the
+// gearbox, async, gcode, A1 - map to SMODE_NONE and simply keep the last loaded set, which they
+// never read.
+int settingModeOf(int m) {
+  switch (m) {
+    case MODE_TURN: return SMODE_TURN;
+    case MODE_FACE: return SMODE_FACE;
+    case MODE_CUT: return SMODE_CUT;
+    case MODE_THREAD: return SMODE_THREAD;
+    case MODE_TPR: return SMODE_TPR;
+    case MODE_ELLIPSE: return SMODE_ELLIPSE;
+    case MODE_SLOT: return SMODE_SLOT;
+    case MODE_CONE: return SMODE_CONE;
+    default: return SMODE_NONE;
+  }
+}
+
+// Same letters settingModeLetter() puts in front of a stored key, reachable from a SettingMode
+// rather than from a table row - the save path has the mode but not the row.
+char modeLetterOf(int sm) {
+  switch (sm) {
+    case SMODE_TURN: return 't';
+    case SMODE_FACE: return 'f';
+    case SMODE_CUT: return 'p';
+    case SMODE_THREAD: return 'h';
+    case SMODE_TPR: return 'r';
+    case SMODE_ELLIPSE: return 'e';
+    case SMODE_SLOT: return 's';
+    case SMODE_CONE: return 'c';
+    default: return 0;
+  }
+}
+
+// Live set -> the mode's own copy, and back. Called either side of a mode change.
+void modeScopedStore(int sm) {
+  if (sm == SMODE_NONE) return;
+  modePasses[sm] = turnPasses;
+  modeSpringPasses[sm] = springPasses;
+  modeClearanceDu[sm] = safeDistanceDu;
+  modePeckDu[sm] = peckDepthDu;
+  modeFlankInfeed[sm] = flankInfeed;
+  modeSlotReductionDu[sm] = slotLeftReductionDu;
+}
+
+void modeScopedLoad(int sm) {
+  if (sm == SMODE_NONE) return;
+  turnPasses = modePasses[sm];
+  savedTurnPasses = turnPasses; // it has not changed, it belongs to a different mode now
+  springPasses = modeSpringPasses[sm];
+  safeDistanceDu = modeClearanceDu[sm];
+  peckDepthDu = modePeckDu[sm];
+  flankInfeed = modeFlankInfeed[sm];
+  slotLeftReductionDu = modeSlotReductionDu[sm];
+}
+
+// Reading and writing a mode-scoped item by its suffix. The live variables hold the current
+// mode's values, so a row belonging to the mode you are in has to go through them - the array is
+// only up to date for the modes you are not in.
+long modeScopedRead(int sm, const char* k) {
+  if (sm == settingModeOf(mode)) modeScopedStore(sm);
+  if (!strcmp(k, "tps")) return modePasses[sm];
+  if (!strcmp(k, "spp")) return modeSpringPasses[sm];
+  if (!strcmp(k, "safe")) return modeClearanceDu[sm];
+  if (!strcmp(k, "pck")) return modePeckDu[sm];
+  if (!strcmp(k, "fli")) return modeFlankInfeed[sm] ? 1 : 0;
+  if (!strcmp(k, "slt")) return modeSlotReductionDu[sm];
+  return 0;
+}
+
+const char* modeScopedWrite(int sm, const char* k, long value) {
+  if (!strcmp(k, "tps")) {
+    if (value < 1 || value > PASSES_MAX) return "Must be 1 or above";
+    modePasses[sm] = value;
+  } else if (!strcmp(k, "spp")) {
+    if (value < 0 || value > 99) return "Must be 0 to 99";
+    modeSpringPasses[sm] = value;
+  } else if (!strcmp(k, "safe")) {
+    if (value <= 0) return "Must be above 0";
+    modeClearanceDu[sm] = value;
+  } else if (!strcmp(k, "pck")) {
+    if (value < 0) return "Must be 0 or above";
+    modePeckDu[sm] = value;
+  } else if (!strcmp(k, "fli")) {
+    modeFlankInfeed[sm] = value != 0;
+  } else if (!strcmp(k, "slt")) {
+    if (value < 0) return "Must be 0 or above";
+    modeSlotReductionDu[sm] = value;
+  } else {
+    return "Not a stored setting";
+  }
+  // Editing the mode you are standing in has to reach the live set too, or the change would only
+  // appear after switching away and back.
+  if (sm == settingModeOf(mode)) modeScopedLoad(sm);
+  return NULL;
+}
+
 // Whether this mode claims the short press of the settings button for a screen of its own.
 //
 // Threading is the only one so far: its short press opens the thread database. The long press
@@ -1007,7 +1118,7 @@ const char* modeName() {
 // A mode that grows a preset list or a page of its own adds itself here and to
 // enterSettingsScreen(), and nothing else has to move.
 bool modeHasOwnScreen() {
-  return isThreadMode();
+  return settingModeCount(settingModeOf(mode)) > 0;
 }
 
 // Whether pressing the same button again would land on a different mode. Gear hides XGEAR and
@@ -2387,7 +2498,23 @@ void setup() {
   encoderBacklash = pref.getLong(PREF_ENCODER_BACKLASH, ENCODER_BACKLASH);
   encoderSymmetric = pref.getBool(PREF_ENCODER_SYMMETRIC, ENCODER_SYMMETRIC);
   encoderFilter = pref.getLong("eflt", ENCODER_FILTER);
-  safeDistanceDu = pref.getLong("safe", SAFE_DISTANCE_DU);
+  // Per-mode settings, read straight from the table so a mode or an item added there needs no
+  // matching change here. Defaults are the old single global values, so a controller upgrading
+  // from before this starts with every mode set the way the one global was.
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (!settingIsModeScoped(i) || settingIsAction(i)) continue;
+    char key[16];
+    settingKeyName(i, key);
+    int sm = SETTINGS[i].mode;
+    const char* k = SETTINGS[i].prefKey;
+    if (!strcmp(k, "tps")) modePasses[sm] = pref.getLong(key, pref.getInt(PREF_TURN_PASSES, 3));
+    else if (!strcmp(k, "spp")) modeSpringPasses[sm] = pref.getLong(key, pref.getLong("spp", 0));
+    else if (!strcmp(k, "safe")) modeClearanceDu[sm] = pref.getLong(key, pref.getLong("safe", SAFE_DISTANCE_DU));
+    else if (!strcmp(k, "pck")) modePeckDu[sm] = pref.getLong(key, pref.getLong("pck", 0));
+    else if (!strcmp(k, "fli")) modeFlankInfeed[sm] = pref.getBool(key, pref.getBool("fli", false));
+    else if (!strcmp(k, "slt")) modeSlotReductionDu[sm] = pref.getLong(key, pref.getLong("slt", 0));
+  }
+  modeScopedLoaded = true;
   pulse1Use = pref.getBool("p1u", PULSE_1_USE);
   pulse1Invert = pref.getBool("p1i", PULSE_1_INVERT);
   pulse2Use = pref.getBool("p2u", PULSE_2_USE);
@@ -2465,6 +2592,9 @@ void setup() {
   savedShowBigDro = showBigDro = pref.getBool(PREF_SHOW_BDRO);
   savedMoveStep = moveStep = pref.getLong(PREF_MOVE_STEP, MOVE_STEP_1);
   setModeFromLoop(savedMode = pref.getInt(PREF_MODE));
+  // setModeFromLoop returns early when the stored mode is the one already selected, so the live
+  // set would still hold defaults. Load it explicitly for whatever mode we ended up in.
+  modeScopedLoad(settingModeOf(mode));
   savedMeasure = measure = pref.getInt(PREF_MEASURE);
   savedConeRatio = coneRatio = pref.getFloat(PREF_CONE_RATIO, coneRatio);
   savedTurnPasses = turnPasses = pref.getInt(PREF_TURN_PASSES, turnPasses);
@@ -2571,7 +2701,19 @@ bool saveIfChanged() {
   if (a1.rightStop != a1.savedRightStop) pref.putLong(PREF_RIGHT_STOP_A1, a1.savedRightStop = a1.rightStop);
   if (a1.disabled != a1.savedDisabled) pref.putBool(PREF_DISABLED_A1, a1.savedDisabled = a1.disabled);
   if (coneRatio != savedConeRatio) pref.putFloat(PREF_CONE_RATIO, savedConeRatio = coneRatio);
-  if (turnPasses != savedTurnPasses) pref.putInt(PREF_TURN_PASSES, savedTurnPasses = turnPasses);
+  // Passes belong to the mode now, so it goes under the mode's own key. The wizard changes this
+  // constantly and the old global key would have every mode overwriting the others.
+  if (turnPasses != savedTurnPasses) {
+    savedTurnPasses = turnPasses;
+    int sm = settingModeOf(mode);
+    if (sm != SMODE_NONE) {
+      modePasses[sm] = turnPasses;
+      char key[16] = {'\0'};
+      key[0] = modeLetterOf(sm);
+      strcpy(key + 1, "tps");
+      pref.putLong(key, turnPasses);
+    }
+  }
   if (auxForward != savedAuxForward) pref.putBool(PREF_AUX_FORWARD, savedAuxForward = auxForward);
   pref.end();
   nvsSaveBatches++;
@@ -2727,6 +2869,13 @@ void setModeFromLoop(int value) {
     setStarts(1);
   } else if (mode == MODE_ASYNC || mode == MODE_A1) {
     setAsyncTimerEnable(false);
+  }
+  // Hand the per-mode settings over: the mode being left keeps what it was using, and the one
+  // being entered gets its own back. Only once the arrays have been read, or the first mode
+  // change during startup would store defaults over what is stored.
+  if (modeScopedLoaded) {
+    modeScopedStore(settingModeOf(mode));
+    modeScopedLoad(settingModeOf(value));
   }
   mode = value;
   setupIndex = 0;
@@ -3436,6 +3585,13 @@ int keyCodeToDigit(int keyCode) {
   return -1;
 }
 
+// Opens the current mode's own page directly, skipping the directory it is not part of.
+void enterModeScreen() {
+  enterSettingsScreen(false);
+  settingsSection = SEC_MODE;
+  settingsIndex = settingModeFirst(settingModeOf(mode));
+}
+
 void enterSettingsScreen(bool threadPicker) {
   inSettings = !threadPicker;
   inThreadPicker = threadPicker;
@@ -3482,6 +3638,9 @@ Axis* settingsAxisOf(int index) {
 // of branches, and re-ordering the menu cannot silently point a row at the wrong variable.
 long settingsReadValue(int index) {
   const char* k = SETTINGS[index].prefKey;
+  if (settingIsModeScoped(index)) {
+    return modeScopedRead(SETTINGS[index].mode, k);
+  }
   Axis* a = settingsAxisOf(index);
   if (a != NULL) {
     if (!strcmp(k, "inv")) return a->invertStepper ? 1 : 0;
@@ -3507,12 +3666,7 @@ long settingsReadValue(int index) {
   if (!strcmp(k, "ebl")) return encoderBacklash;
   if (!strcmp(k, "ebls")) return encoderSymmetric ? 1 : 0;
   if (!strcmp(k, "eflt")) return encoderFilter;
-  if (!strcmp(k, "spp")) return springPasses;
-  if (!strcmp(k, "pck")) return peckDepthDu;
-  if (!strcmp(k, "fli")) return flankInfeed ? 1 : 0;
   if (!strcmp(k, "rtd")) return retractDu;
-  if (!strcmp(k, "slt")) return slotLeftReductionDu;
-  if (!strcmp(k, "safe")) return safeDistanceDu;
   if (!strcmp(k, "p1u")) return pulse1Use ? 1 : 0;
   if (!strcmp(k, "p1i")) return pulse1Invert ? 1 : 0;
   if (!strcmp(k, "p2u")) return pulse2Use ? 1 : 0;
@@ -3544,6 +3698,18 @@ long settingsReadValue(int index) {
 // a setting is written, so the menu and the serial restore command cannot disagree.
 const char* settingsWriteValue(int index, long value) {
   const char* k = SETTINGS[index].prefKey;
+  if (settingIsModeScoped(index)) {
+    const char* err = modeScopedWrite(SETTINGS[index].mode, k, value);
+    if (err != NULL) return err;
+    char key[16];
+    settingKeyName(index, key);
+    if (settingIsToggle(index)) {
+      settingsPutGlobalBool(key, value != 0);
+    } else {
+      settingsPutGlobalLong(key, value);
+    }
+    return NULL;
+  }
   Axis* a = settingsAxisOf(index);
   if (a != NULL) {
     if (!strcmp(k, "inv")) {
@@ -3635,22 +3801,9 @@ const char* settingsWriteValue(int index, long value) {
     if (value < 1 || value > 1023) return "Filter must be 1-1023";
     encoderFilter = value;
     pcnt_set_filter_value(PCNT_UNIT_0, encoderFilter);
-  } else if (!strcmp(k, "spp")) {
-    if (value < 0 || value > 99) return "Must be 0 to 99";
-    springPasses = value;
-  } else if (!strcmp(k, "pck")) {
-    peckDepthDu = value;
-  } else if (!strcmp(k, "fli")) {
-    flankInfeed = value != 0;
   } else if (!strcmp(k, "rtd")) {
     if (value <= 0) return "Must be above 0";
     retractDu = value;
-  } else if (!strcmp(k, "slt")) {
-    if (value < 0) return "Must be 0 or above";
-    slotLeftReductionDu = value;
-  } else if (!strcmp(k, "safe")) {
-    if (value <= 0) return "Must be above 0";
-    safeDistanceDu = value;
   } else if (!strcmp(k, "p1u")) {
     if (value != 0) {
       const char* clash = auxConflictMessage(AUX_HANDWHEEL_1);
@@ -3912,15 +4065,26 @@ void handleSettingsJson() {
   webServer.sendContent("{\"version\":\"H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) +
       "\",\"metric\":" + String(measure == MEASURE_METRIC ? 1 : 0) +
       ",\"busy\":" + String(machineIsBusy() ? 1 : 0) + ",\"sections\":[");
-  bool firstSection = true;
-  for (int sec = 0; sec < SECTION_COUNT; sec++) {
-    int first = settingSectionFirst(sec);
-    if (first < 0 || settingSectionValueCount(sec) < 1) continue;
-    if (!firstSection) webServer.sendContent(",");
-    firstSection = false;
-    webServer.sendContent("{\"name\":\"" + jsonEscape(SECTION_NAMES[sec]) + "\",\"items\":[");
+  bool firstGroup = true;
+  // Directory sections first, then one group per mode. The panel keeps the mode pages behind the
+  // settings button because offering the threading page while set up to face is noise; a browser
+  // has room to show the lot, and hiding them here would make the page the poorer front end.
+  for (int g = 0; g < SECTION_COUNT + SMODE_COUNT; g++) {
+    bool isMode = g >= SECTION_COUNT;
+    int m = g - SECTION_COUNT;
+    int first = isMode ? settingModeFirst(m) : settingSectionFirst(g);
+    int count = isMode ? settingModeCount(m) : settingSectionCount(g);
+    const char* name = isMode ? settingModeName(m) : SECTION_NAMES[g];
+    if (first < 0 || count < 1 || name[0] == 0) continue;
+    // A group of nothing but actions has nothing to edit over HTTP.
+    int editable = 0;
+    for (int i = first; i < first + count; i++) if (!settingIsAction(i)) editable++;
+    if (editable < 1) continue;
+
+    if (!firstGroup) webServer.sendContent(",");
+    firstGroup = false;
+    webServer.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"items\":[");
     bool firstItem = true;
-    int count = settingSectionCount(sec);
     for (int i = first; i < first + count; i++) {
       if (settingIsAction(i)) continue;
       if (!firstItem) webServer.sendContent(",");
@@ -4202,9 +4366,27 @@ void taskWeb(void *param) {
 
 // Moves to another item in the open section, wrapping inside it. delta of +-1 steps one item,
 // larger jumps a page.
+// First index and length of whatever list the settings screen is showing. The mode page is not a
+// section - it is the current mode's run of the table - but it is navigated identically, so
+// everything that walks a list goes through these two rather than knowing which it has.
+int settingsListFirst() {
+  return settingsSection == SEC_MODE ? settingModeFirst(settingModeOf(mode))
+                                     : settingSectionFirst(settingsSection);
+}
+
+int settingsListCount() {
+  return settingsSection == SEC_MODE ? settingModeCount(settingModeOf(mode))
+                                     : settingSectionCount(settingsSection);
+}
+
+const char* settingsListName() {
+  return settingsSection == SEC_MODE ? settingModeName(settingModeOf(mode))
+                                     : SECTION_NAMES[settingsSection];
+}
+
 void settingsMove(int delta) {
-  int first = settingSectionFirst(settingsSection);
-  int count = settingSectionCount(settingsSection);
+  int first = settingsListFirst();
+  int count = settingsListCount();
   if (first < 0 || count < 1) return;
   int at = settingsIndex - first;
   at = ((at + delta) % count + count) % count;
@@ -4270,11 +4452,16 @@ void processSettingsKeypress(int keyCode) {
     return;
   }
 
-  // Inside a section.
+  // Inside a section, or on the mode page.
   if (keyCode == B_OFF) {
-    // Back to the directory rather than straight out, so a wrong turn costs one keypress.
-    settingsSection = -1;
-    resetNumpad();
+    if (settingsSection == SEC_MODE) {
+      // The mode page is not in the directory, so there is nothing above it to go back to.
+      exitSettingsScreens();
+    } else {
+      // Back to the directory rather than straight out, so a wrong turn costs one keypress.
+      settingsSection = -1;
+      resetNumpad();
+    }
     return;
   }
   int digit = keyCodeToDigit(keyCode);
@@ -4298,6 +4485,8 @@ void processSettingsKeypress(int keyCode) {
     if (keyCode == B_ON) {
       if (isOn) {
         splashError("Turn off first");
+      } else if (!strcmp(SETTINGS[settingsIndex].prefKey, "thr")) {
+        enterSettingsScreen(true); // the thread database
       } else {
         enterCalScreen();
       }
@@ -4325,6 +4514,7 @@ void processSettingsKeypress(int keyCode) {
 
 long getSettingsValueHash() {
   if (settingsSection < 0) return settingsDirIndex * 31L + 7L;
+  if (settingsIndex < 0 || settingsIndex >= SETTINGS_COUNT) return settingsSection * 7919L;
   // wifiUp is in here because the WiFi section prints the address beside the value, and the access
   // point can finish coming up after the screen has already been drawn.
   return settingsReadValue(settingsIndex) * 3L + settingsIndex * 101L + (wifiUp ? 977L : 0L);
@@ -4399,11 +4589,11 @@ void updateSettingsDisplay() {
     return;
   }
 
-  // Inside a section: one item at a time, since a value has to be typed into it.
-  int first = settingSectionFirst(settingsSection);
-  int count = settingSectionCount(settingsSection);
+  // Inside a section, or on a mode's page: one item at a time, since a value has to be typed in.
+  int first = settingsListFirst();
+  int count = settingsListCount();
   lcd.setCursor(0, 0);
-  charIndex = lcd.print(SECTION_NAMES[settingsSection]);
+  charIndex = lcd.print(settingsListName());
   charIndex += lcd.print(" ");
   charIndex += lcd.print(settingsIndex - first + 1);
   charIndex += lcd.print("/");
@@ -5463,7 +5653,11 @@ void processKeypadEvent() {
         // Long press always reaches the settings menu. That is what frees the short press for
         // each mode to claim - see modeHasOwnScreen().
         bool held = millis() - buttonSettingsPressMs >= BUTTON_HOLD_MS;
-        enterSettingsScreen(!held && modeHasOwnScreen());
+        if (!held && modeHasOwnScreen()) {
+          enterModeScreen();
+        } else {
+          enterSettingsScreen(false);
+        }
       }
     }
   }

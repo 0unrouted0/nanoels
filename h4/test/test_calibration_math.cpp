@@ -352,7 +352,7 @@ static void testDerivedFigures() {
 
 static void testSettingsTable() {
   group("settings table");
-  expectL("item count", SETTINGS_COUNT, 73);
+  expectL("item count", SETTINGS_COUNT, 90);
   expectL("section count", (int)SECTION_COUNT, 9);
 
   // Navigating a section is a first index and a count, which only works if a section's items
@@ -371,7 +371,39 @@ static void testSettingsTable() {
   }
   expectB("every section has items", allPopulated, true);
   expectB("each section is one unbroken run", contiguous, true);
-  expectL("sections cover every item exactly once", covered, SETTINGS_COUNT);
+
+  // Mode-scoped items are not in any directory section - they live on the mode's own page - so
+  // between them the sections and the modes have to account for every row and no row twice.
+  bool modesContiguous = true;
+  int modeCovered = 0;
+  for (int m = SMODE_NONE + 1; m < SMODE_COUNT; m++) {
+    int first = settingModeFirst(m);
+    int count = settingModeCount(m);
+    if (first < 0 || count < 1) continue; // a mode is allowed to have no settings of its own
+    modeCovered += count;
+    for (int i = first; i < first + count; i++) {
+      if (i >= SETTINGS_COUNT || SETTINGS[i].mode != m) modesContiguous = false;
+    }
+  }
+  expectB("each mode is one unbroken run", modesContiguous, true);
+  expectL("sections and modes cover every item exactly once", covered + modeCovered, SETTINGS_COUNT);
+
+  // The two prefixes share one key namespace, so an item must not claim both.
+  bool scopeExclusive = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsModeScoped(i) && settingIsAxis(i)) scopeExclusive = false;
+    // A mode-scoped row must be on the mode page, and only those rows may be.
+    if (settingIsModeScoped(i) != (SETTINGS[i].section == SEC_MODE)) scopeExclusive = false;
+  }
+  expectB("an item is scoped to an axis or a mode, never both", scopeExclusive, true);
+
+  // Several modes deliberately share a suffix - every pass mode has "tps" - so the mode letter is
+  // the only thing keeping their stored values apart. If it ever returned 0 they would collide.
+  bool modeLetters = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (settingIsModeScoped(i) && settingModeLetter(i) == 0) modeLetters = false;
+  }
+  expectB("every mode-scoped item has a letter", modeLetters, true);
 
   // A per-axis item has to say which axis, and a global one must not claim an axis - the axis
   // used to be inferred from the index being odd or even, which grouping by section broke.
@@ -469,9 +501,19 @@ static void testSettingsTable() {
   }
   expectB("toggle wording is complete", togglesLabelled, true);
 
+  // Actions open another screen rather than holding a value. Their key is not storage, it is
+  // which screen: the sketch dispatches on it, so two actions sharing one would open the wrong
+  // thing, and an unknown one falls through to calibration - which moves an axis.
   int actionCount = 0;
-  for (int i = 0; i < SETTINGS_COUNT; i++) if (settingIsAction(i)) actionCount++;
-  expectL("there is exactly one action item", actionCount, 1);
+  bool actionKeysKnown = true;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    if (!settingIsAction(i)) continue;
+    actionCount++;
+    const char* k = SETTINGS[i].prefKey;
+    if (strcmp(k, "") != 0 && strcmp(k, "thr") != 0) actionKeysKnown = false;
+  }
+  expectL("the actions are calibration and the two thread databases", actionCount, 3);
+  expectB("every action names a screen the sketch knows", actionKeysKnown, true);
 
   bool kindsExclusive = true;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
@@ -479,12 +521,14 @@ static void testSettingsTable() {
   }
   expectB("kinds are mutually exclusive", kindsExclusive, true);
 
+  // Anything that holds a value needs somewhere to store it. Actions are exempt: their key names
+  // a screen instead, and may be empty.
   bool keysPresent = true;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
-    bool hasKey = SETTINGS[i].prefKey != 0 && SETTINGS[i].prefKey[0] != 0;
-    if (hasKey == settingIsAction(i)) keysPresent = false;
+    if (settingIsAction(i)) continue;
+    if (SETTINGS[i].prefKey == 0 || SETTINGS[i].prefKey[0] == 0) keysPresent = false;
   }
-  expectB("storable items have a key, the action has none", keysPresent, true);
+  expectB("every storable item has a key", keysPresent, true);
 
   // Every per-axis item must resolve to a letter, or its stored key collides with the same suffix
   // on another axis. This is what index-parity derivation silently got wrong for A1, which has no
@@ -509,7 +553,10 @@ static void testSettingsTable() {
   // qualified by the axis letter, which is how three axes reuse the same suffixes. Built with the
   // firmware's own settingKeyName() - restating the composition here is what let the parity bug
   // live behind a passing uniqueness check.
-  char qualified[80][20];
+  // Sized from the table rather than from a number someone has to remember to raise: at 80 this
+  // overran its stack the moment the per-mode rows landed, and a buffer overrun is a much worse
+  // way to learn the table grew than a failed assertion.
+  char qualified[SETTINGS_COUNT][20];
   int count = 0;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
     if (settingIsAction(i)) continue;
@@ -550,7 +597,7 @@ static void testSettingsTable() {
   expectB("the last item is the calibration action", settingIsAction(SETTINGS_COUNT - 1), true);
   // Preferences is what the directory opens on, so it has to be the first section.
   expectL("preferences comes first", (int)SEC_PREFS, 0);
-  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 16);
+  expectL("preferences holds what belongs to the machine", settingSectionCount(SEC_PREFS), 11);
 }
 
 static void testSlotting() {
