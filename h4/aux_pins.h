@@ -84,4 +84,31 @@ inline int auxConflict(int device, int enabledMask) {
   return -1;
 }
 
+// Of everything that claims to be enabled, which devices actually get their pins.
+//
+// Needed because a setup stored before the conflict check existed can hold two devices on the same
+// terminals, and because the conflicts are not pairwise-independent: dropping one device can free
+// pins that make a later one viable, so the answer depends on the order they are granted in.
+//
+// The A1 axis goes first because it is part of the machine rather than an accessory - silently
+// disabling a motion axis to keep a joystick alive would be the wrong way round - then the
+// handwheels, then the stick, which needs all six terminals and so is the easiest to give up.
+inline int auxResolveConflicts(int enabledMask) {
+  static const int priority[AUX_DEVICE_COUNT] = {
+    AUX_A1_AXIS, AUX_HANDWHEEL_1, AUX_HANDWHEEL_2, AUX_JOYSTICK,
+  };
+  int granted = 0;
+  for (int i = 0; i < AUX_DEVICE_COUNT; i++) {
+    int d = priority[i];
+    if (!(enabledMask & (1 << d))) {
+      continue;
+    }
+    if (auxConflict(d, granted) >= 0) {
+      continue;
+    }
+    granted |= 1 << d;
+  }
+  return granted;
+}
+
 #endif // AUX_PINS_H

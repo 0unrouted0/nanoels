@@ -301,7 +301,7 @@ Press the display button to cycle the extra readouts: spindle angle, then RPM wi
 
 Cutting speed is what the tool actually feels, and it falls with diameter. The RPM that's right on 50mm stock gives a third of the speed on 16mm, and facing towards centre takes it to zero — which is why the finish goes off as you approach the middle of a faced surface.
 
-Turn **Constant speed** on in Preferences and the RPM readout changes from showing what the speed *is* to showing what the spindle *should be doing*:
+Turn **Constant speed** on in Preferences, then press the display button until the RPM readout is showing — this replaces that line, so it's invisible until you're on it. The readout changes from showing what the speed *is* to showing what the spindle *should be doing*:
 
 ```
 850rpm >620 +37%

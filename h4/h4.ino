@@ -2346,17 +2346,13 @@ void setup() {
   // Now that both the axes and the stored device flags exist, wire up the aux terminals. A stored
   // setup that predates the conflict check can have two devices claiming the same pins, so drop
   // the losers rather than configuring the terminals twice and letting the last one win silently.
-  for (int d = 0; d < AUX_DEVICE_COUNT; d++) {
-    if (auxConflict(d, auxEnabledMask(a1.active, pulse1Use, pulse2Use, joystickUse)) < 0) {
-      continue;
-    }
-    switch (d) {
-      case AUX_A1_AXIS: a1.active = false; break;
-      case AUX_HANDWHEEL_1: pulse1Use = false; break;
-      case AUX_HANDWHEEL_2: pulse2Use = false; break;
-      case AUX_JOYSTICK: joystickUse = false; break;
-    }
-  }
+  // Only the in-memory flags change - nothing is written back, so correcting the setting that
+  // caused it restores the device rather than leaving a stored value quietly rewritten.
+  int auxGranted = auxResolveConflicts(auxEnabledMask(a1.active, pulse1Use, pulse2Use, joystickUse));
+  a1.active = (auxGranted & (1 << AUX_A1_AXIS)) != 0;
+  pulse1Use = (auxGranted & (1 << AUX_HANDWHEEL_1)) != 0;
+  pulse2Use = (auxGranted & (1 << AUX_HANDWHEEL_2)) != 0;
+  joystickUse = (auxGranted & (1 << AUX_JOYSTICK)) != 0;
   applyAuxPins();
 
   isOn = false;
@@ -2786,8 +2782,10 @@ void buttonPlusMinusPress(bool plus) {
   }
 }
 
-// Asks for a pattern. Safe to call from anywhere, including the motion loop and an interrupt:
-// it only sets a flag, and taskDisplay does the work.
+// Asks for a pattern. Safe from any task and from the motion loop - it only sets a flag, and
+// taskDisplay does the work. NOT safe from an interrupt: this function lives in flash like
+// everything else here, so calling it from one of the IRAM_ATTR handlers would fault the moment a
+// settings write had the flash cache disabled.
 void beepFor(int pattern) {
   beepRequest = pattern;
 }

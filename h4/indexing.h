@@ -30,6 +30,11 @@ inline IndexPosition indexNearest(long posInRev, long countsPerRev, long divisio
   if (divisions < 1 || countsPerRev < 1) {
     return r;
   }
+  // Normalised here rather than trusted. spindleModulo already returns 0..countsPerRev-1 so the
+  // firmware never passes anything else, but a negative slipping through would truncate towards
+  // zero in the division below and hand back a negative mark number - which reads on the display
+  // as mark 0 or -1 of 6, and looks like an encoder fault rather than an arithmetic one.
+  posInRev = calSpindleModulo(posInRev, (int)countsPerRev);
   // Nearest mark, rounding half up. The result can land on `divisions` itself, meaning the spindle
   // is just short of coming back round to mark 0 - which is the same mark a whole turn later.
   long nearest = (posInRev * divisions + countsPerRev / 2) / countsPerRev;

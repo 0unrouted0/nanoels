@@ -918,6 +918,30 @@ static void testAuxPins() {
   expectL("a device does not conflict with itself", auxConflict(AUX_JOYSTICK, joyOnly), -1);
   expectL("nor does the A1 axis", auxConflict(AUX_A1_AXIS, a1Only), -1);
 
+  // Resolving a stored setup where several devices claim the same terminals. Order matters: the
+  // A1 axis is part of the machine, so it must not be the one silently dropped to keep an
+  // accessory alive.
+  expectL("nothing enabled resolves to nothing", auxResolveConflicts(none), 0);
+  expectL("a lone device survives", auxResolveConflicts(joyOnly), joyOnly);
+  expectL("the axis wins over the stick",
+      auxResolveConflicts(auxEnabledMask(true, false, false, true)), a1Only);
+  expectL("the axis wins over handwheel 1",
+      auxResolveConflicts(auxEnabledMask(true, true, false, false)), a1Only);
+  expectL("handwheel 1 wins over the stick",
+      auxResolveConflicts(auxEnabledMask(false, true, false, true)), hw1Only);
+  // Compatible devices must both survive - dropping one of a pair that never collided would be
+  // worse than not checking at all.
+  expectL("the axis and handwheel 2 coexist",
+      auxResolveConflicts(auxEnabledMask(true, false, true, false)),
+      auxEnabledMask(true, false, true, false));
+  expectL("both handwheels coexist",
+      auxResolveConflicts(auxEnabledMask(false, true, true, false)),
+      auxEnabledMask(false, true, true, false));
+  // Everything on at once: the axis and handwheel 2 fit together, the other two do not fit at all.
+  expectL("all four resolves to the two that fit",
+      auxResolveConflicts(auxEnabledMask(true, true, true, true)),
+      auxEnabledMask(true, false, true, false));
+
   // Every device needs a name short enough to fit "Used by " plus the name on a 20-column line.
   for (int d = 0; d < AUX_DEVICE_COUNT; d++) {
     checks++;
@@ -987,6 +1011,25 @@ static void testIndexing() {
   expectB("inside tolerance is on the mark", indexOnMark(4, 5), true);
   expectB("outside is not", indexOnMark(6, 5), false);
   expectB("tolerance is inclusive", indexOnMark(-5, 5), true);
+
+  // A position outside one revolution is normalised rather than trusted. Truncation towards zero
+  // would otherwise hand back a negative mark number, which reads on the display as an encoder
+  // fault rather than an arithmetic one.
+  ip = indexNearest(-10, CPR, 6);
+  expectL("a negative position wraps to a real mark", ip.index, 0);
+  expectL("and keeps its sign against that mark", ip.errCounts, -10);
+  ip = indexNearest(-667, CPR, 6);
+  expectL("a negative position lands on the last mark", ip.index, 5);
+  expectB("exactly on it", calAbsL(ip.errCounts) <= 1, true);
+  ip = indexNearest(CPR + 667, CPR, 6);
+  expectL("more than a turn wraps too", ip.index, 1);
+  expectB("and is exact", calAbsL(ip.errCounts) <= 1, true);
+  bool everyIndexInRange = true;
+  for (long p = -3 * CPR; p < 3 * CPR; p += 37) {
+    IndexPosition q = indexNearest(p, CPR, 6);
+    if (q.index < 0 || q.index >= 6) everyIndexInRange = false;
+  }
+  expectB("no position produces a mark outside the list", everyIndexInRange, true);
 
   // Nonsense settings must be inert rather than dividing by zero.
   ip = indexNearest(100, CPR, 0);
