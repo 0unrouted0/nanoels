@@ -3157,19 +3157,20 @@ void numpadPlusMinus(bool plus) {
   // TODO: implement going over 9 and below 1.
 }
 
+// What a number typed on the main screen means, for a move, a limit, a coordinate or a pitch.
+//
+// In units of the current jog step - see calNumpadToDu for why. Threads per inch are the one
+// exception: a TPI figure is a count rather than a distance, so it stays a whole number typed as
+// it always was, and scaling it by the step would be meaningless.
 long numpadToDeciMicrons() {
   long result = getNumpadResult();
   if (result == 0) {
     return 0;
   }
-  if (measure == MEASURE_INCH) {
-    result = result * 254;
-  } else if (measure == MEASURE_TPI) {
-    result = round(254000.0 / result);
-  } else { // Metric
-    result = result * 10;
+  if (measure == MEASURE_TPI) {
+    return round(254000.0 / result);
   }
-  return result;
+  return calNumpadToDu(result, moveStep);
 }
 
 float numpadToConeRatio() {

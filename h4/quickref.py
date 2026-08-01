@@ -160,6 +160,10 @@ def page1():
         [P("It moves itself", S_CELL_B),
          P("Keep clear, know where the stop key is, and try anything new with the tool well away "
            "from the work.", S_CELL)],
+        [P("Typing a distance", S_CELL_B),
+         P("A number you type is in units of the <b>step</b> shown on the top line. At a step of "
+           "1.00 you type <b>4</b> for 4mm; at 0.01 you type <b>425</b> for 4.25mm. The bottom "
+           "line shows what it came to before you commit it.", S_CELL)],
     ]
     story.append(numbered(intro, numw=20 * mm))
     story.append(Spacer(1, 7))
