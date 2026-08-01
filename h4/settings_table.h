@@ -110,8 +110,9 @@ const SettingDesc SETTINGS[] = {
   {"Hold when idle",     SETTING_AXIS_BOOL, "rst",  SEC_X, SAX_X, "no", "yes", 0},
 
   // -- A1 axis ------------------------------------------------------------
-  // Whether the axis exists is read once at startup, so it needs a restart to take effect.
-  {"Fitted (restart)",   SETTING_AXIS_BOOL, "act",  SEC_A1, SAX_A1, "yes", "no", 0},
+  // The axis shares its terminals with the handwheels and the joystick, so switching it on is
+  // refused while one of those holds the pins - see aux_pins.h.
+  {"Fitted",             SETTING_AXIS_BOOL, "act",  SEC_A1, SAX_A1, "yes", "no", 0},
   {"Rotary",             SETTING_AXIS_BOOL, "rot",  SEC_A1, SAX_A1, "yes", "no", 0},
   {"Invert direction",   SETTING_AXIS_BOOL, "inv",  SEC_A1, SAX_A1, "inverted", "normal", 0},
   {"Backlash",           SETTING_AXIS_DU,   "bla",  SEC_A1, SAX_A1, 0, 0, 0},
@@ -140,19 +141,21 @@ const SettingDesc SETTINGS[] = {
   {"Glitch filter",        SETTING_GLOBAL_NUM,  "eflt", SEC_ENCODER, SAX_NONE, 0, 0, "cycles"},
 
   // -- Handwheels ---------------------------------------------------------
-  // Whether a handwheel is fitted is read once at startup to attach its interrupt, so that one
-  // needs a restart. The rest take effect immediately.
-  {"Fitted 1 (restart)", SETTING_GLOBAL_BOOL, "p1u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
+  // Handwheel 1 shares its terminals with the A1 axis and the joystick, handwheel 2 with the
+  // joystick, so switching one on is refused while another device holds the pins. Interrupts are
+  // attached and released as these change - see aux_pins.h.
+  {"Fitted 1",           SETTING_GLOBAL_BOOL, "p1u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
   {"Invert 1",           SETTING_GLOBAL_BOOL, "p1i",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
-  {"Fitted 2 (restart)", SETTING_GLOBAL_BOOL, "p2u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
+  {"Fitted 2",           SETTING_GLOBAL_BOOL, "p2u",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
   {"Invert 2",           SETTING_GLOBAL_BOOL, "p2i",  SEC_HANDWHEEL, SAX_NONE, "yes", "no", 0},
   {"Pulses per rev",     SETTING_GLOBAL_NUM,  "hppr", SEC_HANDWHEEL, SAX_NONE, 0, 0, "pulses"},
   {"Min pulse width",    SETTING_GLOBAL_NUM,  "pmw",  SEC_HANDWHEEL, SAX_NONE, 0, 0, "us"},
   {"Dead-band",          SETTING_GLOBAL_NUM,  "phb",  SEC_HANDWHEEL, SAX_NONE, 0, 0, "counts"},
 
   // -- Joystick -----------------------------------------------------------
-  // Which pin is which direction is wiring, so it stays in machine_config.h.
-  {"Fitted (restart)",   SETTING_GLOBAL_BOOL, "joy",  SEC_JOYSTICK, SAX_NONE, "yes", "no", 0},
+  // Which pin is which direction is wiring, so it stays in machine_config.h. The stick needs all
+  // six terminals, so it conflicts with every other device that uses them - see aux_pins.h.
+  {"Fitted",             SETTING_GLOBAL_BOOL, "joy",  SEC_JOYSTICK, SAX_NONE, "yes", "no", 0},
   {"Debounce",           SETTING_GLOBAL_NUM,  "jdb",  SEC_JOYSTICK, SAX_NONE, 0, 0, "ms"},
 
   // -- WiFi and updates ---------------------------------------------------

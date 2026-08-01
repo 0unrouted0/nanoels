@@ -9,6 +9,8 @@
 #include "settings_table.h"
 #include "pass_math.h"
 #include "encoder_health.h"
+#include "beeper.h"
+#include "aux_pins.h"
 
 // Runtime copies of the machine_config.h defaults that the settings menu can change. The
 // constants there are only the starting point for a device that has never been configured.
@@ -225,7 +227,12 @@ bool nextIsOnFlag; // whether nextIsOn requires attention
 unsigned long resetMillis = 0;
 int emergencyStop = 0;
 
-bool beepFlag = false; // allows time-critical code to ask for a beep on another core
+// Which pattern the buzzer has been asked for, or BEEP_NONE. Written from any core - including
+// the motion loop, which must not sit in tone() - and consumed by taskDisplay, which owns the
+// buzzer and plays the pattern out step by step. A request arriving while one is playing replaces
+// it: the newest event is the one worth hearing.
+volatile int beepRequest = BEEP_NONE;
+BeeperState beeper; // Only touched by taskDisplay
 
 long dupr = 0; // pitch, tenth of a micron per rotation
 long savedDupr = 0; // dupr saved in Preferences
@@ -985,7 +992,7 @@ bool splashActive() {
 // A refused input: the message and the beep always travel together.
 void splashError(const char* text) {
   splash(text);
-  beep();
+  beepFor(BEEP_REFUSED);
 }
 
 // Deci-microns for a number just typed on the numpad, in the current measurement system.
@@ -1509,9 +1516,19 @@ void taskDisplay(void *param) {
         saveTime = now;
       }
     }
-    if (beepFlag) {
-      beepFlag = false;
-      beep();
+    // The buzzer lives here because playing a multi-step pattern means coming back to it over and
+    // over, which the motion loop on core 1 cannot afford to do.
+    if (beepRequest != BEEP_NONE) {
+      beeperStart(&beeper, beepRequest, nowMs);
+      beepRequest = BEEP_NONE;
+    }
+    int beepFreq = 0;
+    if (beeperTick(&beeper, nowMs, &beepFreq)) {
+      if (beepFreq > 0) {
+        tone(BUZZ, beepFreq);
+      } else {
+        noTone(BUZZ);
+      }
     }
     if (abs(z.pendingPos) > z.estopSteps || abs(x.pendingPos) > x.estopSteps) {
       setEmergencyStop(ESTOP_POS);
@@ -2098,8 +2115,8 @@ void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
 void taskAttachInterrupts(void *param) {
   encHealthReset(&encHealth, micros());
   startPulseCounter(PCNT_UNIT_0, ENC_A, ENC_B);
-  if (pulse1Use) attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
-  if (pulse2Use) attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
+  // The handwheel interrupts are attached by applyAuxPins(), which owns the aux terminals and
+  // runs again whenever a device is enabled or disabled.
   vTaskDelete(NULL);
 }
 
@@ -2109,6 +2126,83 @@ void setEmergencyStop(int kind) {
   xSemaphoreTake(z.mutex, 10);
   xSemaphoreTake(x.mutex, 10);
   xSemaphoreTake(a1.mutex, 10);
+}
+
+// Configures the six auxiliary terminals from the current device flags, and is the only code that
+// touches them. Called at startup and again whenever one of the flags changes, so enabling a
+// handwheel or the joystick takes effect immediately instead of at the next restart.
+//
+// It also fixes something that never worked: the startup pin setup used to run before the stored
+// settings were read, so it always configured whatever machine_config.h said. A handwheel or
+// joystick switched on from the settings menu was saved, survived the reboot, and still had no
+// pins configured for it.
+//
+// Every pin is released to a plain input first. A device being switched off has to stop driving
+// before another claims the same terminals, and the two passes mean the order the flags happen to
+// be in cannot leave a pin configured by its previous owner. Callers must ensure the machine is
+// idle: the A1 enable line floats for the moment between the two passes.
+void applyAuxPins() {
+  detachInterrupt(digitalPinToInterrupt(A12));
+  detachInterrupt(digitalPinToInterrupt(A22));
+  pinMode(A11, INPUT);
+  pinMode(A12, INPUT);
+  pinMode(A13, INPUT);
+  pinMode(A21, INPUT);
+  pinMode(A22, INPUT);
+  pinMode(A23, INPUT);
+
+  if (a1.active) {
+    pinMode(A12, OUTPUT);
+    pinMode(A13, OUTPUT);
+    pinMode(A11, OUTPUT);
+    DHIGH(A13);
+  }
+
+  if (pulse1Use) {
+    pinMode(A11, OUTPUT);
+    pinMode(A12, INPUT);
+    pinMode(A13, INPUT);
+    DLOW(A11);
+    // Anything counted while the pins were someone else's is not handwheel movement.
+    pulse1Delta = 0;
+    attachInterrupt(digitalPinToInterrupt(A12), pulse1Enc, CHANGE);
+  }
+
+  if (pulse2Use) {
+    pinMode(A21, OUTPUT);
+    pinMode(A22, INPUT);
+    pinMode(A23, INPUT);
+    DLOW(A21);
+    pulse2Delta = 0;
+    attachInterrupt(digitalPinToInterrupt(A22), pulse2Enc, CHANGE);
+  }
+
+  if (joystickUse) {
+    for (int i = 0; i < 6; i++) {
+      pinMode(joystickPin(i), INPUT_PULLUP);
+    }
+  } else {
+    // Held directions have to be dropped, or an axis carries on moving after the stick that was
+    // driving it has been switched off.
+    for (int i = 0; i < 6; i++) {
+      joystickPinActive[i] = false;
+    }
+    for (int i = 0; i < 4; i++) {
+      joystickDirPressed[i] = false;
+    }
+  }
+}
+
+// Refuses to switch an auxiliary device on over terminals another one already holds. See
+// aux_pins.h for the claim table.
+const char* auxConflictMessage(int device) {
+  int other = auxConflict(device, auxEnabledMask(a1.active, pulse1Use, pulse2Use, joystickUse));
+  if (other < 0) {
+    return NULL;
+  }
+  static char msg[24];
+  snprintf(msg, sizeof(msg), "Used by %s", auxDeviceName(other));
+  return msg;
 }
 
 void setup() {
@@ -2125,34 +2219,11 @@ void setup() {
   pinMode(X_ENA, OUTPUT);
   DHIGH(X_STEP);
 
-  if (ACTIVE_A1) {
-    pinMode(A12, OUTPUT);
-    pinMode(A13, OUTPUT);
-    pinMode(A11, OUTPUT);
-    DHIGH(A13);
-  }
-
   pinMode(BUZZ, OUTPUT);
+  beeperReset(&beeper);
 
-  if (pulse1Use) {
-    pinMode(A11, OUTPUT);
-    pinMode(A12, INPUT);
-    pinMode(A13, INPUT);
-    DLOW(A11);
-  }
-
-  if (pulse2Use) {
-    pinMode(A21, OUTPUT);
-    pinMode(A22, INPUT);
-    pinMode(A23, INPUT);
-    DLOW(A21);
-  }
-
-  if (joystickUse) {
-    for (int i = 0; i < 6; i++) {
-      pinMode(joystickPin(i), INPUT_PULLUP);
-    }
-  }
+  // The auxiliary terminals are configured further down, once the stored settings have been read
+  // and the axes exist - applyAuxPins() needs both.
 
   Preferences pref;
   pref.begin(PREF_NAMESPACE);
@@ -2200,6 +2271,22 @@ void setup() {
   encoderInvert = pref.getBool(PREF_ENCODER_INVERT, encoderInvert);
   wifiEnabled = pref.getBool("wfen", WIFI_ENABLED);
   wifiPin = pref.getLong("wfpw", WIFI_PIN_DEFAULT);
+
+  // Now that both the axes and the stored device flags exist, wire up the aux terminals. A stored
+  // setup that predates the conflict check can have two devices claiming the same pins, so drop
+  // the losers rather than configuring the terminals twice and letting the last one win silently.
+  for (int d = 0; d < AUX_DEVICE_COUNT; d++) {
+    if (auxConflict(d, auxEnabledMask(a1.active, pulse1Use, pulse2Use, joystickUse)) < 0) {
+      continue;
+    }
+    switch (d) {
+      case AUX_A1_AXIS: a1.active = false; break;
+      case AUX_HANDWHEEL_1: pulse1Use = false; break;
+      case AUX_HANDWHEEL_2: pulse2Use = false; break;
+      case AUX_JOYSTICK: joystickUse = false; break;
+    }
+  }
+  applyAuxPins();
 
   isOn = false;
   savedDupr = dupr = pref.getLong(PREF_DUPR);
@@ -2351,7 +2438,7 @@ bool saveIfChanged() {
 void markAxisOrigin(Axis* a) {
   bool hasSemaphore = xSemaphoreTake(a->mutex, 10) == pdTRUE;
   if (!hasSemaphore) {
-    beepFlag = true;
+    beepFor(BEEP_REFUSED);
   }
   if (a->leftStop != LONG_MAX) {
     a->leftStop -= a->pos;
@@ -2628,8 +2715,15 @@ void buttonPlusMinusPress(bool plus) {
   }
 }
 
+// Asks for a pattern. Safe to call from anywhere, including the motion loop and an interrupt:
+// it only sets a flag, and taskDisplay does the work.
+void beepFor(int pattern) {
+  beepRequest = pattern;
+}
+
+// The general acknowledgement, and what every existing caller means by a beep.
 void beep() {
-  tone(BUZZ, 1000, 500);
+  beepFor(BEEP_ACK);
 }
 
 // One-key retract & return: first press moves X away from the workpiece by retractDu remembering
@@ -2746,8 +2840,10 @@ void leaveStop(Axis* a, long oldStop) {
     markOrigin();
   } else if (isGearboxMode() && a == getPitchAxis() && a->pos == oldStop) {
     // Spindle is most likely out of sync with the stepper because
-    // it was spinning while the lead screw was on the stop.
+    // it was spinning while the lead screw was on the stop. Worth its own sound: the thread being
+    // cut is wrong from here on, and nothing else about the machine looks different.
     spindlePosSync = spindleModulo(spindlePos - spindleFromPos(a, a->pos));
+    beepFor(BEEP_SYNC_LOST);
   }
 }
 
@@ -3316,7 +3412,13 @@ const char* settingsWriteValue(int index, long value) {
     } else if (!strcmp(k, "rst")) {
       a->needsRest = value != 0;
     } else if (!strcmp(k, "act")) {
+      // Only A1 lives on the shared terminals; Z and X have pins of their own.
+      if (a == &a1 && value != 0) {
+        const char* clash = auxConflictMessage(AUX_A1_AXIS);
+        if (clash != NULL) return clash;
+      }
       a->active = value != 0;
+      if (a == &a1) applyAuxPins();
     } else if (!strcmp(k, "rot")) {
       a->rotational = value != 0;
     } else {
@@ -3383,11 +3485,21 @@ const char* settingsWriteValue(int index, long value) {
     if (value <= 0) return "Must be above 0";
     safeDistanceDu = value;
   } else if (!strcmp(k, "p1u")) {
+    if (value != 0) {
+      const char* clash = auxConflictMessage(AUX_HANDWHEEL_1);
+      if (clash != NULL) return clash;
+    }
     pulse1Use = value != 0;
+    applyAuxPins();
   } else if (!strcmp(k, "p1i")) {
     pulse1Invert = value != 0;
   } else if (!strcmp(k, "p2u")) {
+    if (value != 0) {
+      const char* clash = auxConflictMessage(AUX_HANDWHEEL_2);
+      if (clash != NULL) return clash;
+    }
     pulse2Use = value != 0;
+    applyAuxPins();
   } else if (!strcmp(k, "p2i")) {
     pulse2Invert = value != 0;
   } else if (!strcmp(k, "hppr")) {
@@ -3400,7 +3512,12 @@ const char* settingsWriteValue(int index, long value) {
     if (value < 0) return "Must be 0 or above";
     pulseHalfBacklash = value;
   } else if (!strcmp(k, "joy")) {
+    if (value != 0) {
+      const char* clash = auxConflictMessage(AUX_JOYSTICK);
+      if (clash != NULL) return clash;
+    }
     joystickUse = value != 0;
+    applyAuxPins();
   } else if (!strcmp(k, "jdb")) {
     if (value < 0) return "Must be 0 or above";
     joystickDebounceMs = value;
@@ -5390,7 +5507,7 @@ void modeTurn(Axis* main, Axis* aux) {
     stepToFinal(aux, auxPos);
     if (main->pos == mainPos && aux->pos == auxPos) {
       setIsOnFromLoop(false);
-      beep();
+      beepFor(BEEP_DONE);
     }
   }
 }
@@ -5509,7 +5626,7 @@ void modeSlot() {
     }
   } else {
     setIsOnFromLoop(false);
-    beep();
+    beepFor(BEEP_DONE);
   }
 }
 
@@ -5585,7 +5702,7 @@ void modeCut() {
     }
   } else {
     setIsOnFromLoop(false);
-    beep();
+    beepFor(BEEP_DONE);
   }
 }
 
@@ -5657,7 +5774,7 @@ void modeEllipse(Axis* main, Axis* aux) {
     stepToFinal(aux, auxStartStop);
     if (aux->pos == auxStartStop) {
       setIsOnFromLoop(false);
-      beep();
+      beepFor(BEEP_DONE);
     }
   }
 }

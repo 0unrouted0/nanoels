@@ -9,6 +9,8 @@
 #include "../settings_table.h"
 #include "../pass_math.h"
 #include "../encoder_health.h"
+#include "../beeper.h"
+#include "../aux_pins.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -798,6 +800,135 @@ static void testEncoderHealth() {
   expectL("restarting keeps the dirty count", h.dirtyWindows, 1);
 }
 
+// Plays a pattern through to its end, collecting every tone change. Returns the number of
+// changes, which is one per step plus the silence that ends it.
+static int beeperRun(int pattern, int* freqs, int max) {
+  BeeperState s;
+  beeperReset(&s);
+  beeperStart(&s, pattern, 1000);
+  int n = 0;
+  int freq = 0;
+  for (unsigned long t = 1000; t < 4000 && n < max; t++) {
+    if (beeperTick(&s, t, &freq)) {
+      freqs[n++] = freq;
+    }
+  }
+  return n;
+}
+
+static void testBeeper() {
+  group("buzzer patterns");
+  int f[16];
+
+  // The acknowledgement is one tone and then silence - the same single beep every existing
+  // caller has always produced.
+  expectL("ack is one tone", beeperRun(BEEP_ACK, f, 16), 2);
+  expectL("ack tone", f[0], 1000);
+  expectL("ack ends silent", f[1], 0);
+
+  // Refused is two low tones with a gap, so a rejected keypress cannot be mistaken for an
+  // operation finishing.
+  expectL("refused has three steps plus silence", beeperRun(BEEP_REFUSED, f, 16), 4);
+  expectL("refused first tone", f[0], 400);
+  expectL("refused gap is silent", f[1], 0);
+  expectL("refused second tone", f[2], 400);
+  expectL("refused ends silent", f[3], 0);
+
+  // Done rises, sync-lost falls. Direction is the cue that survives a noisy shop.
+  int n = beeperRun(BEEP_DONE, f, 16);
+  expectL("done has two tones plus silence", n, 3);
+  expectB("done rises", f[1] > f[0], true);
+  n = beeperRun(BEEP_SYNC_LOST, f, 16);
+  expectL("sync lost has five steps plus silence", n, 6);
+  expectB("sync lost falls", f[4] < f[0], true);
+
+  // A pattern must always end silent, or the buzzer stays on until the next event.
+  for (int p = BEEP_ACK; p < BEEP_PATTERN_COUNT; p++) {
+    n = beeperRun(p, f, 16);
+    expectL("pattern ends silent", f[n - 1], 0);
+  }
+
+  // Starting a pattern mid-play replaces it rather than queueing, so the newest event is heard.
+  BeeperState s;
+  beeperReset(&s);
+  beeperStart(&s, BEEP_SYNC_LOST, 0);
+  int freq = 0;
+  beeperTick(&s, 0, &freq);
+  expectL("playing the first pattern", freq, 1200);
+  beeperStart(&s, BEEP_INDEX, 10);
+  beeperTick(&s, 10, &freq);
+  expectL("replaced by the newer one", freq, 1600);
+
+  // Silence has to be reported as a change so the caller knows to call noTone(), and the machine
+  // must then go quiet rather than repeating.
+  beeperReset(&s);
+  beeperStart(&s, BEEP_INDEX, 0);
+  beeperTick(&s, 0, &freq);
+  expectB("nothing to do mid-tone", beeperTick(&s, 30, &freq), false);
+  expectB("the end of the tone is a change", beeperTick(&s, 60, &freq), true);
+  expectL("and it is silence", freq, 0);
+  expectB("finished patterns stay quiet", beeperTick(&s, 5000, &freq), false);
+
+  // An unknown pattern must be inert rather than reading off the end of the table.
+  beeperReset(&s);
+  beeperStart(&s, BEEP_PATTERN_COUNT + 7, 0);
+  expectB("an unknown pattern does nothing", beeperTick(&s, 0, &freq), false);
+  expectB("as does BEEP_NONE", beeperTick(&s, 0, &freq), false);
+
+  // millis() wraps every 49 days. A pattern straddling it must finish, not hang on its step.
+  beeperReset(&s);
+  beeperStart(&s, BEEP_ACK, 0xFFFFFF00UL);
+  beeperTick(&s, 0xFFFFFF00UL, &freq);
+  expectB("a pattern straddling the rollover ends", beeperTick(&s, 0xFFFFFF00UL + 300, &freq), true);
+  expectL("and ends silent", freq, 0);
+}
+
+static void testAuxPins() {
+  group("auxiliary terminal conflicts");
+  // The claim table, stated independently of the header so a wrong edit to it fails here rather
+  // than only showing up as a device that quietly stops working.
+  expectL("A1 axis takes the first three", auxClaimMask(AUX_A1_AXIS), 0x07);
+  expectL("handwheel 1 takes the same three", auxClaimMask(AUX_HANDWHEEL_1), 0x07);
+  expectL("handwheel 2 takes the second three", auxClaimMask(AUX_HANDWHEEL_2), 0x38);
+  expectL("the joystick takes all six", auxClaimMask(AUX_JOYSTICK), 0x3F);
+
+  int none = auxEnabledMask(false, false, false, false);
+  expectL("nothing conflicts on a bare machine", auxConflict(AUX_JOYSTICK, none), -1);
+
+  // The pairs that overlap.
+  int a1Only = auxEnabledMask(true, false, false, false);
+  expectL("handwheel 1 clashes with the A1 axis", auxConflict(AUX_HANDWHEEL_1, a1Only), AUX_A1_AXIS);
+  expectL("the joystick clashes with the A1 axis", auxConflict(AUX_JOYSTICK, a1Only), AUX_A1_AXIS);
+  int hw2Only = auxEnabledMask(false, false, true, false);
+  expectL("the joystick clashes with handwheel 2", auxConflict(AUX_JOYSTICK, hw2Only), AUX_HANDWHEEL_2);
+  int joyOnly = auxEnabledMask(false, false, false, true);
+  expectL("the A1 axis clashes with the joystick", auxConflict(AUX_A1_AXIS, joyOnly), AUX_JOYSTICK);
+  expectL("handwheel 2 clashes with the joystick", auxConflict(AUX_HANDWHEEL_2, joyOnly), AUX_JOYSTICK);
+
+  // The pairs that do not. These have to stay allowed or the check would be worse than useless.
+  expectL("handwheel 2 is fine beside the A1 axis", auxConflict(AUX_HANDWHEEL_2, a1Only), -1);
+  int hw1Only = auxEnabledMask(false, true, false, false);
+  expectL("handwheel 2 is fine beside handwheel 1", auxConflict(AUX_HANDWHEEL_2, hw1Only), -1);
+  expectL("the A1 axis is fine beside handwheel 2", auxConflict(AUX_A1_AXIS, hw2Only), -1);
+
+  // Re-enabling something already on must not report itself as its own conflict, or a settings
+  // restore that writes every key back would refuse the ones that are already correct.
+  expectL("a device does not conflict with itself", auxConflict(AUX_JOYSTICK, joyOnly), -1);
+  expectL("nor does the A1 axis", auxConflict(AUX_A1_AXIS, a1Only), -1);
+
+  // Every device needs a name short enough to fit "Used by " plus the name on a 20-column line.
+  for (int d = 0; d < AUX_DEVICE_COUNT; d++) {
+    checks++;
+    size_t len = strlen(auxDeviceName(d)) + 8;
+    if (len <= 20) {
+      printf("  ok   %s fits the error line\n", auxDeviceName(d));
+    } else {
+      failures++;
+      printf("  FAIL %s makes a %d character message\n", auxDeviceName(d), (int)len);
+    }
+  }
+}
+
 int main() {
   printf("calibration_math.h\n==================\n");
   testGeometry();
@@ -815,6 +946,8 @@ int main() {
   testFlankInfeed();
   testPeck();
   testEncoderHealth();
+  testBeeper();
+  testAuxPins();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }
