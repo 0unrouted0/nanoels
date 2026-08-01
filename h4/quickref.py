@@ -473,15 +473,36 @@ def page3():
                    "is cut to the same depth outwards from the bore. Trapezoidal and ACME include "
                    "the usual root clearance; taper pipe threads are deeper than they look because "
                    "the form is truncated rather than pointed.", S_DIM))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 7))
 
+    story.append(Paragraph("Cutting one of them", S_H2))
+    tips = [
+        [P("1", S_CELL_B), P("Pick the thread from the machine's own list — press the settings key "
+                             "briefly while in threading, then choose it. That sets the feed.", S_CELL)],
+        [P("2", S_CELL_B), P("Touch the tool on the outside of the bar and zero the cross slide. "
+                             "Set the <b>down</b> limit there: that is the surface.", S_CELL)],
+        [P("3", S_CELL_B), P("Wind in by the depth from the table and set the <b>up</b> limit. That "
+                             "is full thread depth. In diameter readout, wind in twice the figure.", S_CELL)],
+        [P("4", S_CELL_B), P("Set the two length limits, leaving room at the far end for the tool "
+                             "to come out — a run-out groove if the thread ends against a shoulder.",
+                             S_CELL)],
+        [P("5", S_CELL_B), P("Six to ten passes suits most threads, plus a spring pass or two. More "
+                             "passes means a lighter cut each time and a better finish.", S_CELL)],
+    ]
+    story.append(numbered(tips))
+    return story
+
+
+def page4():
     mats = read_materials()
+    story = []
     story.append(Paragraph("Cutting speeds", S_H2))
-    story.append(P("Metres per minute at the surface of the work — what the controller uses when "
-                   "you switch the cutting-speed helper on. Conservative starting points for "
-                   "turning, not limits: depth of cut, how rigid the setup is and whether you are "
-                   "using coolant all matter too. Work up from these if the finish and the swarf "
-                   "look happy.", S_BODY))
+    story.append(P("For setting the spindle yourself. Metres per minute measured at the surface of "
+                   "the work, not the spindle speed — the two are only the same on a one-metre bar. "
+                   "Conservative starting points for turning rather than limits: depth of cut, how "
+                   "rigid the setup is and whether you are using coolant all matter as well. Work "
+                   "up from these while the finish and the swarf still look happy, and drop to "
+                   "roughly half for parting off.", S_BODY))
     story.append(Spacer(1, 3))
 
     half = (len(mats) + 1) // 2
@@ -493,11 +514,67 @@ def page3():
                          P("%d m/min" % carbide, S_CELL)])
         tables.append(zebra(data, [None, 20 * mm, 20 * mm]))
     story.append(two_columns(tables[0], tables[1]))
-    story.append(Spacer(1, 4))
-    story.append(P("<b>Turning it into a spindle speed:</b> rpm = 318 &#215; speed &#247; diameter "
-                   "in mm. So mild steel with carbide at 120 m/min on a 40mm bar wants about 950 "
-                   "rpm. The controller does this for you and keeps doing it as the diameter "
-                   "changes, which is what makes it useful when facing towards the centre.", S_NOTE))
+    story.append(Spacer(1, 6))
+
+    # The grid does the arithmetic for you, which is the whole point when you are standing at the
+    # machine with a bar in the chuck and a speed chart on the wall.
+    story.append(Paragraph("Spindle speed for that cutting speed", S_H2))
+    story.append(P("rpm = 318 &#215; cutting speed &#247; diameter in mm. Read it off here instead: "
+                   "the diameter you are cutting down the side, the speed from the table above "
+                   "across the top. Round down to whatever your lathe actually offers.", S_BODY))
+    story.append(Spacer(1, 3))
+    speeds = [20, 30, 60, 90, 120, 200]
+    diams = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100]
+    head = [P("&#216; mm", S_KEY)] + [P("%d" % s, S_KEY) for s in speeds]
+    data = [head]
+    for d in diams:
+        row = [P("%d" % d, S_CELL_B)]
+        for v in speeds:
+            rpm = 318.3 * v / d
+            row.append(P("%d" % (int(round(rpm / 10.0)) * 10 if rpm >= 100 else int(round(rpm / 5.0)) * 5),
+                         S_CELL))
+        data.append(row)
+    colw = [16 * mm] + [None] * len(speeds)
+    story.append(zebra(data, colw))
+    story.append(Spacer(1, 3))
+    story.append(P("Top row is metres per minute. Anything above your lathe's top speed simply "
+                   "means run it flat out — small diameters usually want more than the machine has.",
+                   S_DIM))
+    story.append(Spacer(1, 8))
+
+    # Taper ratios feed the cone and tapered-thread modes directly, and are the sort of number
+    # nobody remembers.
+    story.append(Paragraph("Taper ratios", S_H2))
+    story.append(P("What to type when the taper or tapered-thread setup asks for a ratio. It is "
+                   "the change in <b>diameter</b> per unit of length — (large &#8722; small) &#247; "
+                   "length — so a taper quoted as 1 in 16 is entered as 0.0625.", S_BODY))
+    story.append(Spacer(1, 3))
+    import math
+    tapers = [
+        ("Morse 1", 0.04988, "tailstock and spindle tooling"),
+        ("Morse 2", 0.04995, "the commonest on small lathes"),
+        ("Morse 3", 0.05020, ""),
+        ("Morse 4", 0.05194, ""),
+        ("Morse 5", 0.05263, ""),
+        ("NPT and BSPT", 0.0625, "taper pipe threads, 1 in 16"),
+        ("1 in 10", 0.1000, ""),
+        ("1 in 20", 0.0500, ""),
+    ]
+    half = (len(tapers) + 1) // 2
+    tt = []
+    for chunk in (tapers[:half], tapers[half:]):
+        data = [[P("Taper", S_KEY), P("Enter", S_KEY), P("Included", S_KEY), P("Where", S_KEY)]]
+        for name, ratio, where in chunk:
+            deg = math.degrees(2 * math.atan(ratio / 2.0))
+            data.append([P(name, S_CELL_B), P("%.4f" % ratio, S_CELL),
+                         P("%d&#176; %d'" % (int(deg), round((deg - int(deg)) * 60)), S_CELL),
+                         P(where or "&#8211;", S_CELL)])
+        tt.append(zebra(data, [22 * mm, 14 * mm, 15 * mm, None]))
+    story.append(two_columns(tt[0], tt[1]))
+    story.append(Spacer(1, 3))
+    story.append(P("Working from an angle instead: ratio = 2 &#215; tan(half the included angle). "
+                   "Cutting a taper on the outside and a matching socket needs the same ratio for "
+                   "both — the mode does not care which way round you are cutting.", S_DIM))
     story.append(Spacer(1, 8))
 
     story.append(Paragraph("Using it from a phone", S_H2))
@@ -520,7 +597,9 @@ def page3():
 if __name__ == "__main__":
     import sys
     build(sys.argv[1], "NanoEls H4  ·  Getting Started",
-          [page1(), page2(), page3()],
-          ["What it does, and how to ask for it", "Setting up your lathe",
-           "Threads, cutting speeds and the web page"],
+          [page1(), page2(), page3(), page4()],
+          ["What it does, and how to ask for it",
+           "Setting up your lathe",
+           "Threads it knows, and how to cut one",
+           "Speeds, tapers and the web page"],
           "Settings key: short press = this job's settings   ·   hold it for the main menu")
