@@ -149,6 +149,17 @@ function parseDu(t){
   return Math.round(n * (metric ? DU_MM : DU_IN));
 }
 
+// Surface speed travels as metres per minute the way distances travel as deci-microns, and is
+// converted only here. A shop working in inches thinks in surface feet per minute.
+var FT_PER_M = 3.280839895;
+function fmtSpeed(v){ return String(metric ? v : Math.round(v * FT_PER_M)); }
+function parseSpeed(t){
+  var n = parseFloat(t);
+  if(isNaN(n)) return null;
+  return Math.round(metric ? n : n / FT_PER_M);
+}
+function speedUnit(){ return metric ? "m/min" : "ft/min"; }
+
 function post(key, value){
   var body = "key=" + encodeURIComponent(key) + "&value=" + encodeURIComponent(value);
   return fetch("/api/setting", {
@@ -200,7 +211,9 @@ function refreshBar(){
 }
 
 function shown(item, v){
-  return item.kind === "du" ? fmtDu(v) : String(v);
+  if(item.kind === "du") return fmtDu(v);
+  if(item.kind === "speed") return fmtSpeed(v);
+  return String(v);
 }
 
 function makeRow(item){
@@ -268,7 +281,9 @@ function makeRow(item){
     inp.value = shown(item, item.pending !== undefined ? item.pending : item.value);
   };
   inp.oninput = function(){
-    var v = item.kind === "du" ? parseDu(inp.value) : parseInt(inp.value, 10);
+    var v = item.kind === "du" ? parseDu(inp.value)
+          : item.kind === "speed" ? parseSpeed(inp.value)
+          : parseInt(inp.value, 10);
     if(v === null || isNaN(v)){
       showError(row, "not a number");
       item.pending = undefined;
@@ -284,7 +299,9 @@ function makeRow(item){
   row.appendChild(inp);
   var u = document.createElement("span");
   u.className = "unit";
-  u.textContent = item.unit || "";
+  // Speed has no fixed unit for the same reason a distance has none: it follows the metric/inch
+  // setting, so it is supplied here rather than carried in the table.
+  u.textContent = item.kind === "speed" ? speedUnit() : (item.unit || "");
   row.appendChild(u);
   return row;
 }

@@ -22,6 +22,7 @@ enum SettingKind {
   SETTING_GLOBAL_DU,   // global distance
   SETTING_GLOBAL_NUM,  // global plain number
   SETTING_GLOBAL_LIST, // global choice from a named list, stored as its index
+  SETTING_GLOBAL_SPEED,// global surface speed, stored in m/min and shown in ft/min in inch mode
   SETTING_ACTION,      // not a value at all: ON opens another screen
 };
 
@@ -96,7 +97,9 @@ const SettingDesc SETTINGS[] = {
   {"Constant speed",      SETTING_GLOBAL_BOOL, "cson", SEC_PREFS, SAX_NONE, "on", "off", 0},
   {"Material",            SETTING_GLOBAL_LIST, "cmat", SEC_PREFS, SAX_NONE, 0, 0, 0},
   {"Tool",                SETTING_GLOBAL_BOOL, "ctol", SEC_PREFS, SAX_NONE, "carbide", "HSS", 0},
-  {"Manual speed",        SETTING_GLOBAL_NUM,  "css",  SEC_PREFS, SAX_NONE, 0, 0, "m/min"},
+  // Unit is 0 for the same reason a distance carries 0: it is not fixed, it follows the
+  // metric/inch setting, so whatever renders one supplies m/min or ft/min itself.
+  {"Manual speed",        SETTING_GLOBAL_SPEED,"css",  SEC_PREFS, SAX_NONE, 0, 0, 0},
   {"Spindle max rpm",     SETTING_GLOBAL_NUM,  "smax", SEC_PREFS, SAX_NONE, 0, 0, "rpm"},
 
   // -- Z axis -------------------------------------------------------------
@@ -245,6 +248,13 @@ inline bool settingIsAction(int index) {
 // this table, which has no room for a list per row.
 inline bool settingIsList(int index) {
   return SETTINGS[index].kind == SETTING_GLOBAL_LIST;
+}
+
+// Whether the item is a surface speed. Stored in m/min throughout, the way a distance is stored in
+// deci-microns throughout, and converted to feet per minute only where it meets the operator - so
+// a shop working in inches never has to turn 100 m/min into 328 SFM in its head.
+inline bool settingUsesSpeed(int index) {
+  return SETTINGS[index].kind == SETTING_GLOBAL_SPEED;
 }
 
 // Index of a section's first item, or -1 if it has none.

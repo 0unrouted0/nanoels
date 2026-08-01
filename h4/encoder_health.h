@@ -60,6 +60,13 @@ struct EncHealth {
   long dirtyWindows;     // completed windows that came in under the floor
 };
 
+// Counts a window needs before its coherence is worth recording. Coherence resolves to 100/path
+// percent, so a window holding two counts can only ever read 100, 50 or 0 - and on a low
+// resolution encoder at low rpm that is most windows. Without this, a 24 PPR encoder would report
+// a flawless 100 for its low-water mark however noisy it actually was, which is the worst kind of
+// wrong: a diagnostic that says everything is fine because it cannot see.
+#define ENC_HEALTH_MIN_PATH 8
+
 inline void encHealthReset(EncHealth* h, unsigned long nowUs) {
   h->pathCounts = 0;
   h->netCounts = 0;
@@ -102,7 +109,11 @@ inline bool encHealthAdd(EncHealth* h, long delta, unsigned long nowUs, unsigned
   h->pathRate = (long)((long long)h->pathCounts * 1000000LL / (long long)elapsed);
   h->netRate = (long)((long long)h->netCounts * 1000000LL / (long long)elapsed);
   h->coherence = h->pathCounts > 0 ? (int)(calAbsL(h->netCounts) * 100 / h->pathCounts) : 100;
-  if (h->pathRate >= busyRate) {
+  // Two conditions to be worth judging, and they catch different things. The rate test rejects a
+  // spindle too slow for low coherence to mean anything; the count test rejects a window too
+  // sparse for coherence to be measurable at all, which is what a coarse encoder gives even at
+  // speed. Either alone leaves a hole.
+  if (h->pathRate >= busyRate && h->pathCounts >= ENC_HEALTH_MIN_PATH) {
     if (h->worstCoherence < 0 || h->coherence < h->worstCoherence) {
       h->worstCoherence = h->coherence;
     }

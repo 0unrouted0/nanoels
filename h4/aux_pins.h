@@ -14,6 +14,11 @@
 // device was set up last wins while the other reports nothing or moves an axis unbidden. This
 // header is the single description of the overlap, so the settings layer can refuse the write
 // instead.
+//
+// The table above is stated rather than derived from machine_config.h, because the host tests
+// build this without any board definition at all. If you remap the joystick onto different
+// terminals, auxClaimMask() has to be changed to match - the sketch carries a static_assert that
+// fails the build if they drift apart.
 
 #ifndef AUX_PINS_H
 #define AUX_PINS_H

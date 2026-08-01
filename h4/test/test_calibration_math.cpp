@@ -388,18 +388,20 @@ static void testSettingsTable() {
   bool unitsFit = true;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
     const char* u = SETTINGS[i].unit;
-    if ((settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i)) && u != 0) unitsPlaced = false;
+    if ((settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i) ||
+        settingUsesSpeed(i)) && u != 0) unitsPlaced = false;
     if (u != 0 && (strlen(u) > 8 || u[0] == 0 || u[0] == ' ')) unitsFit = false;
   }
   expectB("only measurable items carry a unit", unitsPlaced, true);
   expectB("units are short enough for the LCD", unitsFit, true);
 
   // Every plain number should say what it is counting. The WiFi PIN is the one real exception:
-  // it is a code, not a quantity. A list is not a quantity either - its value is shown as a name,
-  // so it belongs with the toggles rather than here.
+  // it is a code, not a quantity. A list is not a quantity either - its value is shown as a name -
+  // and a speed's unit follows the metric/inch setting, so neither belongs here.
   int unitless = 0;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
-    if (settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i)) continue;
+    if (settingIsToggle(i) || settingIsAction(i) || settingIsList(i) || settingUsesDu(i) ||
+        settingUsesSpeed(i)) continue;
     if (SETTINGS[i].unit == 0) unitless++;
   }
   expectL("only the PIN is a number without a unit", unitless, 1);
@@ -764,6 +766,22 @@ static void testEncoderHealth() {
   expectL("a slow window is not counted dirty", h.dirtyWindows, 0);
   expectL("a slow window leaves the low-water mark alone", h.worstCoherence, -1);
 
+  // A coarse encoder gives few counts per window even at speed, and coherence resolves to
+  // 100/path percent - so two counts can only ever read 100, 50 or 0. Recording those would tell
+  // a 24 PPR machine its signal was flawless however noisy it really was, which is the worst kind
+  // of wrong: a diagnostic reporting health because it cannot see.
+  encHealthReset(&h, 0);
+  t = 0;
+  const long coarseBusy = encRateFromRpm(96, 30); // 24 PPR at 4x, the coarsest the firmware takes
+  for (int i = 0; i < 60; i++) {
+    t += 20000; // one count per window, still well above the busy rate for this encoder
+    encHealthAdd(&h, 1, t, 20000, coarseBusy, 95);
+  }
+  expectB("a sparse window is above the busy rate", h.pathRate >= coarseBusy, true);
+  expectL("and still reports its coherence", h.coherence, 100);
+  expectL("but is not recorded as flawless", h.worstCoherence, -1);
+  expectL("nor counted either way", h.dirtyWindows, 0);
+
   // The low-water mark has to survive the good windows that follow the bad one, or it would only
   // ever show whatever happened most recently.
   encHealthReset(&h, 0);
@@ -1094,6 +1112,35 @@ static void testSurfaceSpeed() {
   expectL("mild steel on 50mm stock", cssTargetRpm(500000, cssSpeedFor(6, true, 0)), 764);
 
   expectL("out of range names do not crash", (long) strlen(materialName(999)), (long) strlen(materialName(0)));
+
+  group("metric and imperial surface speed");
+  // Stored in m/min throughout, converted only where it meets the operator - the same rule
+  // distances follow in deci-microns. A shop working in inches thinks in surface feet per minute.
+  expectL("metric passes straight through", cssToDisplay(100, false), 100);
+  expectL("100 m/min is 328 ft/min", cssToDisplay(100, true), 328);
+  expectL("and back again", cssFromDisplay(328, true), 100);
+  expectL("metric round trips exactly", cssFromDisplay(cssToDisplay(137, false), false), 137);
+  expectL("zero stays zero", cssToDisplay(0, true), 0);
+  expectB("the unit follows the mode", strcmp(cssUnitName(true), "ft/min") == 0, true);
+  expectB("and in metric", strcmp(cssUnitName(false), "m/min") == 0, true);
+
+  // Every material has to survive being shown in feet and typed back in without drifting, or a
+  // shop working in inches would find its speeds creeping every time it opened the menu.
+  bool imperialRoundTrips = true;
+  for (int m = 1; m < materialCount(); m++) {
+    for (int tool = 0; tool < 2; tool++) {
+      long metric = cssSpeedFor(m, tool != 0, 0);
+      if (cssFromDisplay(cssToDisplay(metric, true), true) != metric) imperialRoundTrips = false;
+    }
+  }
+  expectB("every material survives a trip through feet", imperialRoundTrips, true);
+
+  // Rounding before converting is the trap: whole m/min scaled to feet afterwards moves the
+  // figure by up to two, which shows on a readout with no decimals.
+  expectB("the actual speed is not pre-rounded",
+      cssActualSpeed(500000, 100) != (double)cssActualMPerMin(500000, 100), true);
+  expectF("and still agrees to within a unit",
+      cssActualSpeed(500000, 100), cssActualMPerMin(500000, 100), 1.0);
 
   group("constant surface speed");
   expectL("on target reads zero", cssDeviationPercent(600, 600), 0);

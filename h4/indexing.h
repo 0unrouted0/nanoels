@@ -149,12 +149,44 @@ inline long cssTargetRpm(long diameterDu, long surfaceMPerMin) {
 
 // The surface speed a given diameter and rpm actually produce, in m/min. The other direction, for
 // showing what is happening rather than what should be.
-inline long cssActualMPerMin(long diameterDu, long rpm) {
+//
+// Returned unrounded because the imperial readout multiplies it by 3.28: rounding to a whole
+// m/min first and converting afterwards moves the foot-per-minute figure by up to two, which is
+// visible on a display that shows no decimals.
+inline double cssActualSpeed(long diameterDu, long rpm) {
   if (diameterDu <= 0 || rpm <= 0) {
     return 0;
   }
   double diameterMm = diameterDu / 10000.0;
-  return calRoundL(3.14159265358979 * diameterMm * rpm / 1000.0);
+  return 3.14159265358979 * diameterMm * rpm / 1000.0;
+}
+
+inline long cssActualMPerMin(long diameterDu, long rpm) {
+  return calRoundL(cssActualSpeed(diameterDu, rpm));
+}
+
+// ---------------------------------------------------------------------------
+// Metric and imperial
+// ---------------------------------------------------------------------------
+//
+// Surface speed is stored and computed in m/min throughout, the way distances are stored in
+// deci-microns throughout, and converted only where it meets the operator. A shop working in
+// inches thinks in surface feet per minute and should never have to convert 100 m/min into 328
+// SFM in its head to use the material table.
+//
+// One metre per minute is 3.280839895 feet per minute.
+#define CSS_FEET_PER_METRE 3.280839895
+
+inline long cssToDisplay(long mPerMin, bool inchMode) {
+  return inchMode ? calRoundL(mPerMin * CSS_FEET_PER_METRE) : mPerMin;
+}
+
+inline long cssFromDisplay(long shown, bool inchMode) {
+  return inchMode ? calRoundL(shown / CSS_FEET_PER_METRE) : shown;
+}
+
+inline const char* cssUnitName(bool inchMode) {
+  return inchMode ? "ft/min" : "m/min";
 }
 
 // Percentage the actual rpm is off the target, signed, for a readout that says which way to turn

@@ -335,7 +335,10 @@ const unsigned long JOYSTICK_DEBOUNCE_MS = 20; // Contact changes quicker than t
 
 // Each switch shorts its pin to GND when active. Each row is {pin, key code of the keypad arrow
 // the stick direction stands in for}. Remap to suit how your stick is mounted.
-const int JOYSTICK_DIR_PIN_KEYS[4][2] = {
+// constexpr rather than const so the sketch can assert at compile time that these are still the
+// terminals aux_pins.h says the joystick claims. Remap them and the build fails with a message
+// telling you which table to update, rather than silently letting a conflicting device through.
+constexpr int JOYSTICK_DIR_PIN_KEYS[4][2] = {
   {A11, B_LEFT},  // Stick left
   {A12, B_RIGHT}, // Stick right
   {A13, B_UP},    // Stick up

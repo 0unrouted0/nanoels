@@ -1513,15 +1513,13 @@ void updateDisplay() {
         charIndex += lcd.print(pct);
         charIndex += lcd.print("%");
       } else {
-        float metersPerMin = cssActualMPerMin(diameterDu, rpm);
+        // Unrounded metres per minute, converted at the last moment: rounding first and scaling
+        // afterwards shifts the imperial figure by up to two feet per minute.
+        double speed = cssActualSpeed(diameterDu, rpm);
+        bool inchMode = measure != MEASURE_METRIC;
         charIndex += lcd.print(" ");
-        if (measure == MEASURE_METRIC) {
-          charIndex += lcd.print(metersPerMin, 0);
-          charIndex += lcd.print("m/min");
-        } else {
-          charIndex += lcd.print(metersPerMin * 3.28084, 0);
-          charIndex += lcd.print("ft/min");
-        }
+        charIndex += lcd.print(inchMode ? speed * CSS_FEET_PER_METRE : speed, 0);
+        charIndex += lcd.print(cssUnitName(inchMode));
       }
     }
     printLcdSpaces(charIndex);
@@ -2203,6 +2201,16 @@ void setEmergencyStop(int kind) {
 // before another claims the same terminals, and the two passes mean the order the flags happen to
 // be in cannot leave a pin configured by its previous owner. Callers must ensure the machine is
 // idle: the A1 enable line floats for the moment between the two passes.
+// aux_pins.h describes which device claims which terminal, and it has to be told rather than
+// derived because the host tests build it without machine_config.h. These keep the two in step:
+// remap the joystick onto different pins and the claim table stops describing reality, which
+// would let a conflicting device through the check.
+static_assert(JOYSTICK_DIR_PIN_KEYS[0][0] == A11 && JOYSTICK_DIR_PIN_KEYS[1][0] == A12 &&
+    JOYSTICK_DIR_PIN_KEYS[2][0] == A13 && JOYSTICK_DIR_PIN_KEYS[3][0] == A21,
+    "Joystick direction pins moved - update auxClaimMask() in aux_pins.h to match");
+static_assert(JOYSTICK_MOVE_PIN == A22 && JOYSTICK_STEP_PIN == A23,
+    "Joystick button pins moved - update auxClaimMask() in aux_pins.h to match");
+
 void applyAuxPins() {
   detachInterrupt(digitalPinToInterrupt(A12));
   detachInterrupt(digitalPinToInterrupt(A22));
@@ -3673,7 +3681,13 @@ void commitSetting() {
   long raw = getNumpadResult();
   resetNumpad();
   // Distances are typed in microns or thou, everything else as a plain number.
-  const char* err = settingsWriteValue(settingsIndex, settingsUsesDu() ? numpadRawToDu(raw) : raw);
+  long value = raw;
+  if (settingsUsesDu()) {
+    value = numpadRawToDu(raw);
+  } else if (settingUsesSpeed(settingsIndex)) {
+    value = cssFromDisplay(raw, measure != MEASURE_METRIC);
+  }
+  const char* err = settingsWriteValue(settingsIndex, value);
   if (err != NULL) {
     splashError(err);
   }
@@ -3801,6 +3815,7 @@ String jsonEscape(const char* s) {
 const char* settingKindName(int index) {
   if (settingIsToggle(index)) return "bool";
   if (settingIsList(index)) return "list";
+  if (settingUsesSpeed(index)) return "speed";
   if (settingUsesDu(index)) return "du";
   return "num";
 }
@@ -4327,6 +4342,11 @@ void updateSettingsDisplay() {
       charIndex += lcd.print(value ? (on ? on : "on") : (off ? off : "off"));
     } else if (settingIsList(settingsIndex)) {
       charIndex += lcd.print(settingListName(settingsIndex, value));
+    } else if (settingUsesSpeed(settingsIndex)) {
+      bool inchMode = measure != MEASURE_METRIC;
+      charIndex += lcd.print(cssToDisplay(value, inchMode));
+      charIndex += lcd.print(" ");
+      charIndex += lcd.print(cssUnitName(inchMode));
     } else if (settingUsesDu(settingsIndex)) {
       // A distance has no fixed unit - it is typed and shown in whichever system is selected.
       charIndex += printDeciMicrons(value, 5);
@@ -4374,6 +4394,12 @@ void updateSettingsDisplay() {
     if (settingsUsesDu()) {
       charIndex += printDeciMicrons(numpadRawToDu(getNumpadResult()), 5);
       charIndex += lcd.print(measure == MEASURE_METRIC ? " mm" : "\"");
+    } else if (settingUsesSpeed(settingsIndex)) {
+      // Echoed as typed rather than converted: the figure being confirmed has to be the one that
+      // was entered, or the confirmation looks like a rejection.
+      charIndex += lcd.print(getNumpadResult());
+      charIndex += lcd.print(" ");
+      charIndex += lcd.print(cssUnitName(measure != MEASURE_METRIC));
     } else {
       charIndex += lcd.print(getNumpadResult());
       // Confirming a bare number invites entering it in the wrong unit, so name it here too.
@@ -4386,6 +4412,8 @@ void updateSettingsDisplay() {
     charIndex += lcd.print("?");
   } else if (settingsUsesDu()) {
     charIndex = lcd.print(measure == MEASURE_INCH ? "Type thou, then ON" : "Type microns, ON");
+  } else if (settingUsesSpeed(settingsIndex)) {
+    charIndex = lcd.print(measure == MEASURE_METRIC ? "Type m/min, then ON" : "Type ft/min, ON");
   } else {
     charIndex = lcd.print("Type number, ON");
   }

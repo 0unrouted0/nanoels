@@ -133,7 +133,9 @@ A live health check on the spindle encoder. This is the screen to come back to a
 
    This is worth watching precisely because the RPM readout cannot show it: RPM is accumulated signed, so a counter jittering back and forth cancels itself out and reads as a *stopped* spindle rather than a noisy one.
 
-3. **`Lo` is the lowest coherence seen since the last reset.** This is the number that matters. Noise arrives in bursts you won't be standing at the screen for, so leave the machine running, go and cut something, then come back and read `Lo`. Windows below 30 rpm aren't recorded — starting, stopping and hand-turning all produce low coherence honestly.
+3. **`Lo` is the lowest coherence seen since the last reset.** This is the number that matters. Noise arrives in bursts you won't be standing at the screen for, so leave the machine running, go and cut something, then come back and read `Lo`.
+
+   Two kinds of window are shown but not recorded, so `Lo` stays meaningful. Anything below 30 rpm is ignored — starting, stopping and hand-turning all produce low coherence honestly. So is any window carrying fewer than 8 counts, because coherence resolves to 100/counts percent and a window holding two counts can only ever read 100, 50 or 0. **On a coarse encoder that second rule matters:** below roughly 250 counts per revolution you may find `Lo` stays at `--` at low speeds simply because no window was dense enough to judge. Run faster, or raise the PPR, before concluding the signal is clean.
 4. **`Flp` counts spurious reversals** — a direction change after barely any movement, which is the counter dithering rather than you turning the spindle back. It should stay at 0.
 5. Turn the spindle slowly by hand. `Ang` should sweep smoothly through 0–360° and back to 0 without jumping. Run the spindle under power and check `Rpm` reads steadily rather than wandering.
 6. Press the left arrow to reset the counters and watch again.

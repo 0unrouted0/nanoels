@@ -331,7 +331,9 @@ Set **Material** and **Tool** and the speed is looked up for you:
 | Titanium | 10 | 40 |
 | Plastic | 100 | 250 |
 
-All in m/min. Press **+** or **−** on the Material item to step through the list; the name is shown rather than a number. The web page shows the same list as a dropdown.
+Press **+** or **−** on the Material item to step through the list; the name is shown rather than a number. The web page shows the same list as a dropdown.
+
+The table is in m/min, but you never have to work in it: **surface speed follows the metric/inch setting exactly as distances do.** In inch or TPI mode the readout, the **Manual speed** field and the web page all show surface feet per minute, and typing a figure into **Manual speed** takes it as ft/min. The stored value is m/min underneath, so a controller set up in one system reads correctly in the other.
 
 These are conservative starting points for turning, not gospel — the right speed also depends on depth of cut, feed, how rigid the setup is, and whether there's coolant. They're here so the machine can suggest something sane rather than leave you a number with no way to pick it. Treat them as a safe first cut and adjust from what the chip and the finish tell you.
 
@@ -341,7 +343,7 @@ Set **Material** to `Manual` to use the **Manual speed** figure instead. That's 
 
 ### Spindle indexing
 
-The encoder resolves a revolution far more finely than a chuck can be positioned by hand — 4000 counts is 0.09° — so it can stand in for the dividing head the lathe doesn't have.
+The encoder resolves a revolution far more finely than a chuck can be positioned by hand — a 1000 PPR encoder gives 4000 counts, or 0.09° — so it can stand in for the dividing head the lathe doesn't have. The **Derived figures** panel on the web page shows what your own encoder resolves to.
 
 Set **Spindle divisions** in Preferences to the number of positions you want and the angle line becomes an index readout:
 
