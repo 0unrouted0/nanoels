@@ -405,6 +405,36 @@ static void testSettingsTable() {
   }
   expectB("every mode-scoped item has a letter", modeLetters, true);
 
+  // Axis and mode prefixes share one key namespace, and case is the only thing separating them:
+  // the cone taper is stored under "ccr" while the C axis would claim "Ccr". If a mode letter
+  // ever went upper case the two could collide, and the collision would be silent - the loser
+  // simply reads back the winner's value.
+  bool casesDistinct = true;
+  for (int m = SMODE_NONE + 1; m < SMODE_COUNT; m++) {
+    int i = settingModeFirst(m);
+    if (i < 0) continue;
+    char c = settingModeLetter(i);
+    if (c < 'a' || c > 'z') casesDistinct = false;
+  }
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    char c = settingAxisLetter(i);
+    if (c != 0 && (c < 'A' || c > 'Z')) casesDistinct = false;
+  }
+  expectB("mode letters are lower case, axis letters upper", casesDistinct, true);
+
+  // Two modes sharing a letter would share their whole key namespace.
+  bool lettersUnique = true;
+  for (int a = SMODE_NONE + 1; a < SMODE_COUNT; a++) {
+    int ia = settingModeFirst(a);
+    if (ia < 0) continue;
+    for (int b = a + 1; b < SMODE_COUNT; b++) {
+      int ib = settingModeFirst(b);
+      if (ib < 0) continue;
+      if (settingModeLetter(ia) == settingModeLetter(ib)) lettersUnique = false;
+    }
+  }
+  expectB("no two modes share a letter", lettersUnique, true);
+
   // A per-axis item has to say which axis, and a global one must not claim an axis - the axis
   // used to be inferred from the index being odd or even, which grouping by section broke.
   bool axisConsistent = true;

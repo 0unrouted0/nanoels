@@ -457,7 +457,11 @@ int savedMode = -1; // mode saved in Preferences
 int measure = MEASURE_METRIC; // Whether to show distances in inches
 int savedMeasure = MEASURE_METRIC; // measure value saved in Preferences
 
-float coneRatio = 1; // In cone mode, how much X moves for 1 step of Z
+// How much X moves for 1 step of Z. Cone mode and tapered threading both use it and they used to
+// share one value, so dialling an NPT 1:16 taper into TPR silently replaced whatever cone you had
+// set - and taking the cone back out replaced the thread's taper. Mode-scoped like the rest of the
+// per-operation settings now; this is the live copy for whichever mode is selected.
+float coneRatio = 1;
 float savedConeRatio = 0; // value of coneRatio saved in Preferences
 float nextConeRatio = 0; // coneRatio that should be applied asap
 bool nextConeRatioFlag = false; // whether nextConeRatio requires attention
@@ -591,6 +595,9 @@ long modeClearanceDu[SMODE_COUNT];
 long modePeckDu[SMODE_COUNT];
 bool modeFlankInfeed[SMODE_COUNT];
 long modeSlotReductionDu[SMODE_COUNT];
+// Kept beside them rather than in the settings table: the table stores longs and a taper is a
+// ratio like 0.0625. The setup wizard asks for it every run, so it never needed a menu row.
+float modeTaper[SMODE_COUNT];
 bool modeScopedLoaded = false; // False until the arrays have been read from Preferences
 
 long springPasses = 0; // Extra passes at final depth in turn/face/thread modes, 0 = off
@@ -1054,6 +1061,7 @@ void modeScopedStore(int sm) {
   modePeckDu[sm] = peckDepthDu;
   modeFlankInfeed[sm] = flankInfeed;
   modeSlotReductionDu[sm] = slotLeftReductionDu;
+  modeTaper[sm] = coneRatio;
 }
 
 void modeScopedLoad(int sm) {
@@ -1065,6 +1073,11 @@ void modeScopedLoad(int sm) {
   peckDepthDu = modePeckDu[sm];
   flankInfeed = modeFlankInfeed[sm];
   slotLeftReductionDu = modeSlotReductionDu[sm];
+  coneRatio = modeTaper[sm];
+  savedConeRatio = coneRatio; // it has not changed, it belongs to a different mode now
+  // A pending taper from the mode being left must not land on the one being entered.
+  nextConeRatio = coneRatio;
+  nextConeRatioFlag = false;
 }
 
 // Reading and writing a mode-scoped item by its suffix. The live variables hold the current
@@ -1464,7 +1477,7 @@ void updateDisplay() {
   // spindlePos in the hash too - without it the line would not refresh as the chuck turns.
   long newHashLine3 = z.pos + ((showAngle || indexDivisions > 1) ? spindlePos : -1) + (showTacho ? rpm + x.originPos : -2) + (splashActive() ? splashId * 7919 : -3) +
       (joystickUse && joystickPinActive[4] ? 2000 + joystickDirPressed[0] + 2 * joystickDirPressed[1] + 4 * joystickDirPressed[2] + 8 * joystickDirPressed[3] : 0) + measure + (numpadResult > 0 ? numpadResult : -1) + mode * 5 + dupr +
-      (mode == MODE_CONE ? round(coneRatio * 10000) : 0) + turnPasses + opIndex + setupIndex + gcodeProgramIndex + gcodeProgramCount + spindleStopped * 3 + (isOn ? 139 : -117) + (inNumpad ? 10 : 0) + (auxForward ? 17 : -31) + (xRetracted ? 55 : 0) +
+      (mode == MODE_CONE || mode == MODE_TPR ? round(coneRatio * 10000) : 0) + turnPasses + opIndex + setupIndex + gcodeProgramIndex + gcodeProgramCount + spindleStopped * 3 + (isOn ? 139 : -117) + (inNumpad ? 10 : 0) + (auxForward ? 17 : -31) + (xRetracted ? 55 : 0) +
       (z.leftStop == LONG_MAX ? 123 : z.leftStop) + (z.rightStop == LONG_MIN ? 1234 : z.rightStop) +
       (x.leftStop == LONG_MAX ? 1235 : x.leftStop) + (x.rightStop == LONG_MIN ? 123456 : x.rightStop) + gcodeCommandHash +
       (mode == MODE_A1 ? a1.pos + a1.originPos + (a1.leftStop == LONG_MAX ? 123 : a1.leftStop) + (a1.rightStop == LONG_MIN ? 1234 : a1.rightStop) + a1.disabled : 0) + x.pos + z.pos;
@@ -2514,6 +2527,15 @@ void setup() {
     else if (!strcmp(k, "fli")) modeFlankInfeed[sm] = pref.getBool(key, pref.getBool("fli", false));
     else if (!strcmp(k, "slt")) modeSlotReductionDu[sm] = pref.getLong(key, pref.getLong("slt", 0));
   }
+  // The taper has no table row - see modeTaper - so it is read directly. Both modes fall back to
+  // the old shared value, which is what they were both using before they were separated.
+  {
+    float shared = pref.getFloat(PREF_CONE_RATIO, 1);
+    modeTaper[SMODE_CONE] = pref.getFloat("ccr", shared);
+    // A tapered thread wants a taper, and 1:16 is NPT and BSPT - what the mode was built for.
+    // Cone keeps 1, which is the ratio it has always started at.
+    modeTaper[SMODE_TPR] = pref.getFloat("rcr", shared != 1 ? shared : 0.0625f);
+  }
   modeScopedLoaded = true;
   pulse1Use = pref.getBool("p1u", PULSE_1_USE);
   pulse1Invert = pref.getBool("p1i", PULSE_1_INVERT);
@@ -2596,7 +2618,8 @@ void setup() {
   // set would still hold defaults. Load it explicitly for whatever mode we ended up in.
   modeScopedLoad(settingModeOf(mode));
   savedMeasure = measure = pref.getInt(PREF_MEASURE);
-  savedConeRatio = coneRatio = pref.getFloat(PREF_CONE_RATIO, coneRatio);
+  // The taper is loaded per mode further up and handed to the live copy by modeScopedLoad(), so
+  // there is nothing to read from the old shared key here.
   savedTurnPasses = turnPasses = pref.getInt(PREF_TURN_PASSES, turnPasses);
   savedAuxForward = auxForward = pref.getBool(PREF_AUX_FORWARD, true);
   pref.end();
@@ -2700,7 +2723,18 @@ bool saveIfChanged() {
   if (a1.leftStop != a1.savedLeftStop) pref.putLong(PREF_LEFT_STOP_A1, a1.savedLeftStop = a1.leftStop);
   if (a1.rightStop != a1.savedRightStop) pref.putLong(PREF_RIGHT_STOP_A1, a1.savedRightStop = a1.rightStop);
   if (a1.disabled != a1.savedDisabled) pref.putBool(PREF_DISABLED_A1, a1.savedDisabled = a1.disabled);
-  if (coneRatio != savedConeRatio) pref.putFloat(PREF_CONE_RATIO, savedConeRatio = coneRatio);
+  // Under the mode's own key, so the cone and the tapered thread stop overwriting each other.
+  if (coneRatio != savedConeRatio) {
+    savedConeRatio = coneRatio;
+    int sm = settingModeOf(mode);
+    if (sm != SMODE_NONE) {
+      modeTaper[sm] = coneRatio;
+      char key[16] = {'\0'};
+      key[0] = modeLetterOf(sm);
+      strcpy(key + 1, "cr");
+      pref.putFloat(key, coneRatio);
+    }
+  }
   // Passes belong to the mode now, so it goes under the mode's own key. The wizard changes this
   // constantly and the old global key would have every mode overwriting the others.
   if (turnPasses != savedTurnPasses) {

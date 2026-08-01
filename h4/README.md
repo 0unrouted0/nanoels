@@ -231,6 +231,8 @@ Spring passes, pass count, clearance and the rest are not properties of the mach
 | Ellipse | passes |
 | Slotting | passes, left reduction |
 
+**The taper is per-mode too**, though it's asked for in the setup wizard rather than on a page — it's a ratio, and the menu holds whole numbers. Cone and tapered threading previously shared one value, so dialling NPT's 1:16 into a pipe thread silently replaced whatever cone you had set, and setting a cone back replaced the thread's taper. They keep their own now: cone starts at 1, tapered threading at 0.0625, which is NPT and BSPT.
+
 Set threading to 6 passes with 2 spring passes and turning to 3 with none, and each keeps its own from then on — switching modes swaps them over. Stop returns you to the machine screen rather than to the settings directory, since the mode page isn't part of it.
 
 The gearbox, async, GCode and A1 modes have nothing of their own, so the settings button opens the settings menu whether you hold it or not.
