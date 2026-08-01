@@ -11,6 +11,7 @@
 #include "../encoder_health.h"
 #include "../beeper.h"
 #include "../aux_pins.h"
+#include "../indexing.h"
 
 static int checks = 0;
 static int failures = 0;
@@ -351,7 +352,7 @@ static void testDerivedFigures() {
 
 static void testSettingsTable() {
   group("settings table");
-  expectL("item count", SETTINGS_COUNT, 64);
+  expectL("item count", SETTINGS_COUNT, 68);
   expectL("section count", (int)SECTION_COUNT, 9);
 
   // Navigating a section is a first index and a count, which only works if a section's items
@@ -521,7 +522,7 @@ static void testSettingsTable() {
   expectB("the last item is the calibration action", settingIsAction(SETTINGS_COUNT - 1), true);
   // Preferences is what the directory opens on, so it has to be the first section.
   expectL("preferences comes first", (int)SEC_PREFS, 0);
-  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 9);
+  expectL("preferences holds the operation settings", settingSectionCount(SEC_PREFS), 13);
 }
 
 static void testSlotting() {
@@ -929,6 +930,104 @@ static void testAuxPins() {
   }
 }
 
+static void testIndexing() {
+  group("spindle indexing");
+  const long CPR = 4000; // 1000 PPR, 4x decode
+
+  // Six divisions of 4000 counts is 666.67 - deliberately not a whole number, because that is the
+  // case where an implementation that adds a truncated step drifts.
+  IndexPosition ip = indexNearest(0, CPR, 6);
+  expectL("dead on the first mark", ip.index, 0);
+  expectL("with no error", ip.errCounts, 0);
+
+  ip = indexNearest(667, CPR, 6);
+  expectL("on the second mark", ip.index, 1);
+  expectL("within a count of it", ip.errCounts, 0);
+
+  // The last mark must not have accumulated the truncation of the five before it.
+  ip = indexNearest(3333, CPR, 6);
+  expectL("on the sixth mark", ip.index, 5);
+  expectB("last mark is still exact", calAbsL(ip.errCounts) <= 1, true);
+
+  // Just short of coming back round: nearest is mark 0 a whole turn on, reported as 0 with a
+  // negative error rather than as a seventh mark.
+  ip = indexNearest(3990, CPR, 6);
+  expectL("wraps to the first mark", ip.index, 0);
+  expectL("and reads as short of it", ip.errCounts, -10);
+
+  // Sign convention: positive means the spindle has gone past the mark.
+  ip = indexNearest(680, CPR, 6);
+  expectB("past the mark reads positive", ip.errCounts > 0, true);
+  ip = indexNearest(650, CPR, 6);
+  expectB("short of the mark reads negative", ip.errCounts < 0, true);
+
+  // Every mark of a fine division must still be reachable and distinct.
+  for (long d = 2; d <= 360; d *= 3) {
+    for (long i = 0; i < d; i++) {
+      long pos = (i * CPR + d / 2) / d;
+      ip = indexNearest(pos, CPR, d);
+      checks++;
+      if (ip.index == i % d && calAbsL(ip.errCounts) <= 1) {
+        continue;
+      }
+      failures++;
+      printf("  FAIL %ld divisions, mark %ld: got index %ld err %ld\n", d, i, ip.index, ip.errCounts);
+    }
+  }
+  printf("  ok   every mark of 2, 6, 18, 54, 162 divisions lands on itself\n");
+
+  expectF("error in degrees", indexErrorDeg(10, CPR), 0.9, 0.001);
+  expectF("negative error in degrees", indexErrorDeg(-10, CPR), -0.9, 0.001);
+
+  expectL("half a degree is five counts", indexToleranceCounts(CPR, 5), 5);
+  // A tolerance finer than the encoder resolves would never be reachable, so it floors at one
+  // count rather than at zero.
+  expectL("tolerance never reaches zero", indexToleranceCounts(CPR, 0), 1);
+  expectB("inside tolerance is on the mark", indexOnMark(4, 5), true);
+  expectB("outside is not", indexOnMark(6, 5), false);
+  expectB("tolerance is inclusive", indexOnMark(-5, 5), true);
+
+  // Nonsense settings must be inert rather than dividing by zero.
+  ip = indexNearest(100, CPR, 0);
+  expectL("zero divisions is inert", ip.errCounts, 0);
+  ip = indexNearest(100, 0, 6);
+  expectL("no encoder is inert", ip.errCounts, 0);
+}
+
+static void testSurfaceSpeed() {
+  group("constant surface speed");
+  // 100 m/min on 50mm stock: 1000 * 100 / (pi * 50) = 636.6 rpm.
+  expectL("target rpm at 50mm", cssTargetRpm(500000, 100), 637);
+  // The same speed on a third of the diameter needs three times the rpm - the whole reason the
+  // figure is worth showing.
+  expectL("three times the rpm at a third the diameter", cssTargetRpm(166667, 100), 1910);
+  expectL("actual speed is the inverse", cssActualMPerMin(500000, 637), 100);
+
+  // Facing runs the diameter to zero, where the required rpm runs to infinity. Both directions
+  // have to stay finite rather than dividing by zero at the centre of the work.
+  expectL("no diameter, no target", cssTargetRpm(0, 100), 0);
+  expectL("no diameter, no surface speed", cssActualMPerMin(0, 1000), 0);
+  expectL("no target speed, no target rpm", cssTargetRpm(500000, 0), 0);
+
+  // Capping: a target the lathe cannot reach is reported as the machine's ceiling, so the display
+  // can say the speed is unreachable instead of showing an rpm nobody can dial in.
+  expectL("under the ceiling passes through", cssCappedRpm(637, 2000), 637);
+  expectL("over the ceiling is capped", cssCappedRpm(5000, 2000), 2000);
+  expectL("no ceiling means no cap", cssCappedRpm(5000, 0), 5000);
+
+  expectL("on target reads zero", cssDeviationPercent(600, 600), 0);
+  expectL("too fast reads positive", cssDeviationPercent(600, 900), 50);
+  expectL("too slow reads negative", cssDeviationPercent(600, 300), -50);
+  expectL("no target, no deviation", cssDeviationPercent(0, 900), 0);
+  // Near centre the target collapses and the deviation would otherwise be a number too wide for
+  // the line it shares with the rpm.
+  expectL("clamped high", cssDeviationPercent(1, 100000), 999);
+  // The low side needs no clamp: a stopped spindle is 100% below target and nothing is further
+  // below than that.
+  expectL("a stopped spindle is 100% under", cssDeviationPercent(600, 0), -100);
+  expectL("and that is the floor", cssDeviationPercent(100000, 1), -99);
+}
+
 int main() {
   printf("calibration_math.h\n==================\n");
   testGeometry();
@@ -948,6 +1047,8 @@ int main() {
   testEncoderHealth();
   testBeeper();
   testAuxPins();
+  testIndexing();
+  testSurfaceSpeed();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

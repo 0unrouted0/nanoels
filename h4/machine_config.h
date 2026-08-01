@@ -129,6 +129,33 @@ const int ENCODER_HEALTH_BUSY_RPM = 30;
 const int ENCODER_COHERENCE_FLOOR = 95;
 
 // ---------------------------------------------------------------------------
+// Spindle indexing and surface speed
+// ---------------------------------------------------------------------------
+
+// Divide the spindle into this many equal positions and show which one you are on, turning the
+// encoder into the dividing head the lathe does not have. 0 or 1 is off. Six gives hex flats,
+// four gives a square, and any number up to a full degree per step works.
+const int INDEX_DIVISIONS = 0;
+
+// How close to a mark counts as being on it, in tenths of a degree. The buzzer sounds as you
+// arrive. Too tight and you will never quite land; a chuck turned by hand settles to a few tenths
+// at best, whatever the encoder can resolve.
+const int INDEX_TOLERANCE_TENTHS_DEG = 5; // 0.5 degrees
+
+// Target cutting speed in metres per minute, for the constant surface speed readout. 0 is off.
+// Typical starting points with carbide: 30 for tool steel, 100 for mild steel, 200 for aluminium,
+// 60 for cast iron. High speed steel wants roughly a third of those.
+//
+// The controller has no spindle output - there is no free pin for one - so this tells you what the
+// spindle should be doing and you turn the dial. It matters most when facing, where the diameter
+// runs to zero and the correct speed runs to infinity.
+const int SURFACE_SPEED_M_PER_MIN = 0;
+
+// Highest speed your lathe can actually reach, so a target it cannot meet is reported as capped
+// rather than as an rpm nobody can dial in. 0 means do not cap.
+const int SPINDLE_MAX_RPM = 2000;
+
+// ---------------------------------------------------------------------------
 // Main lead screw (Z)
 // ---------------------------------------------------------------------------
 

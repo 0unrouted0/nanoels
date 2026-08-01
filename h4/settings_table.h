@@ -82,6 +82,12 @@ const SettingDesc SETTINGS[] = {
   {"Slot left reduction", SETTING_GLOBAL_DU,   "slt",  SEC_PREFS, SAX_NONE, 0, 0, 0},
   {"Manual step time",    SETTING_GLOBAL_NUM,  "stm",  SEC_PREFS, SAX_NONE, 0, 0, "ms"},
   {"Step rest",           SETTING_GLOBAL_NUM,  "sdl",  SEC_PREFS, SAX_NONE, 0, 0, "ms"},
+  // Both replace the angle line on the main screen when switched on, so they share its space and
+  // only one can be shown at a time - indexing wins, being the one you act on immediately.
+  {"Spindle divisions",   SETTING_GLOBAL_NUM,  "idiv", SEC_PREFS, SAX_NONE, 0, 0, "marks"},
+  {"Index tolerance",     SETTING_GLOBAL_NUM,  "itol", SEC_PREFS, SAX_NONE, 0, 0, "0.1deg"},
+  {"Surface speed",       SETTING_GLOBAL_NUM,  "css",  SEC_PREFS, SAX_NONE, 0, 0, "m/min"},
+  {"Spindle max rpm",     SETTING_GLOBAL_NUM,  "smax", SEC_PREFS, SAX_NONE, 0, 0, "rpm"},
 
   // -- Z axis -------------------------------------------------------------
   {"Invert direction",   SETTING_AXIS_BOOL, "inv",  SEC_Z, SAX_Z, "inverted", "normal", 0},
