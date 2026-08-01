@@ -569,11 +569,63 @@ Turn on the spindle. Operation will proceed fully automatically and the cutter w
 
 Operation can be stopped at any time by pressing ![IconStop](https://github.com/kachurovskiy/nanoels/assets/517919/cf4b9b31-dda3-4469-9667-1d1c44ea39b4) or using manual move buttons.
 
+### Reading the setup wizard
+
+Every automated mode — turn, face, cut-off, thread, cone, ellipse, slot — works the same way. Set the pitch and the soft limits, then press play and the bottom line asks a short series of questions:
+
+```
+1/3 3 passes?
+2/3 External <>
+3/3 Go Z-5.00mm?
+```
+
+- **`1/3` is the step number and how many there are**, so you can see the end of it.
+- **`<>` means the left and right arrows change the answer.** Without it, play just accepts what's shown.
+- **A number is typed on the numpad**, then play confirms.
+- **The last step is always `Go?`**, and shows how far the tool will move to reach the starting corner before it cuts. Play starts the machine; stop returns you to the beginning.
+
+Before you press play the first time, the bottom line reads `ON to set up 3 steps` — that's the prompt that the mode has a wizard behind it at all.
+
+While an operation runs, the same line shows `Pass 2 of 6` with a progress bar.
+
 ### Automatic threading
 
 Press ![IconThread](https://github.com/kachurovskiy/nanoels/assets/517919/8f07c5bc-fdf5-4eaa-91c4-32a5d656e04a) to switch to the automatic threading which will cut a thread (optionally multi-start one) in multiple passes.
 
-Set the desired pitch to a suitable value e.g. `2mm` or `20tpi`. Negative pitch will result in a left thread and will make the operation start from the left limit, positive pitch will make the operation start from the right. All soft limits (left, right, up, down) must be set before the operation can be started.
+**The four soft limits are the whole setup.** They are not guard rails — they *are* the thread:
+
+| Limit | For an external thread |
+|---|---|
+| ⇥ right, ⇤ left | where the thread starts and ends along the bed |
+| ⇓ down | the **surface** — the first pass starts here |
+| ⇑ up | **full thread depth** — the last pass ends here |
+
+Internal threads run the other way: they start from ⇑ and finish at ⇓.
+
+The passes are simply divided between the two X limits, so **the ⇑ limit is where you tell the controller how deep the thread is.** That's the piece nothing on the panel can work out for you, and it's the usual reason a first thread comes out wrong.
+
+#### Working out the depth
+
+For a 60° thread — metric, UNC/UNF, BSPP — the depth on the **radius** is:
+
+```
+depth = 0.6134 × pitch
+```
+
+M10×1.5 gives 0.6134 × 1.5 = **0.92 mm**. Trapezoidal and ACME are `0.5 × pitch` plus about 0.25 mm clearance; NPT is `0.8 × pitch`.
+
+**If your X readout is set to diameter, enter twice that** — 1.84 mm for the M10 above. The depth formula is a radius figure and the readout is not, which is an easy way to cut a thread twice as deep as intended. The `X readout` setting in Preferences says which mode you're in.
+
+#### A worked example — M10×1.5 external on 10 mm bar
+
+1. Press the thread button, then the settings button to open the thread database and pick `M10 coarse x1.5`. Pitch and units are set for you.
+2. Touch the tool on the outside diameter and zero X.
+3. Set the ⇓ limit here — this is the surface, the first pass starts from it.
+4. Move X in 0.92 mm (or 1.84 mm in diameter mode) and set the ⇑ limit. That's full depth.
+5. Move Z to where the thread starts and set ⇥, then to where it ends and set ⇤. Leave run-out room at the far end for the tool to retract.
+6. Return the tool clear of the work. Press play and answer the setup questions.
+
+Negative pitch cuts a left-hand thread and starts from the left limit instead.
 
 Pressing ![IconPlay](https://github.com/kachurovskiy/nanoels/assets/517919/c9fb0ef5-94d7-4b42-b1a3-4c85c704e80d) guides through remaining steps:
 

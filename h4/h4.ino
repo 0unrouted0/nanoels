@@ -927,11 +927,26 @@ bool manualMovesAllowedWhenOn() {
   return isGearboxMode() || mode == MODE_ASYNC || mode == MODE_CONE || mode == MODE_A1;
 }
 
+// How many questions the setup wizard asks before the next ON starts the machine. The last step
+// is always the "Go?" confirmation, so every mode ends the same way - cone used to return 2 here
+// while its display drew "Go?" at step 3, which meant the step never arrived and cone was the one
+// mode that began cutting straight off a question instead of a confirmation.
 int getLastSetupIndex() {
-  if (mode == MODE_CONE || mode == MODE_GCODE) return 2;
-  if (mode == MODE_TPR) return 4; // passes, external/internal, cone ratio, go
-  if (isPassMode()) return 3;
+  if (mode == MODE_GCODE) return 2; // program, spindle check
+  if (mode == MODE_CONE) return 3; // ratio, external/internal, go
+  if (mode == MODE_TPR) return 4; // passes, external/internal, taper ratio, go
+  if (isPassMode()) return 3; // passes, external/internal, go
   return 0;
+}
+
+// "2/3 " in front of a wizard question. Without it there is nothing to say the questions are a
+// sequence with an end rather than an unbounded interrogation, and no way to tell how far in you
+// are - which is most of what makes the pass modes hard to approach.
+int printSetupStep() {
+  int n = lcd.print(setupIndex);
+  n += lcd.print("/");
+  n += lcd.print(getLastSetupIndex());
+  return n + lcd.print(" ");
 }
 
 Axis* getPitchAxis() {
@@ -1367,43 +1382,57 @@ void updateDisplay() {
       if (!inNumpad && missingStops) {
         charIndex += lcd.print(needZStops() ? "Set all stops" : "Set X stops");
       } else if (numpadResult != 0 && setupIndex == 1) {
+        charIndex += printSetupStep();
         long passes = min(PASSES_MAX, numpadResult);
         charIndex += lcd.print(passes);
         if (passes == 1) charIndex += lcd.print(" pass?");
         else charIndex += lcd.print(" passes?");
       } else if (!isOn && setupIndex == 1) {
+        charIndex += printSetupStep();
         charIndex += lcd.print(turnPasses);
         if (turnPasses == 1) charIndex += lcd.print(" pass?");
         else charIndex += lcd.print(" passes?");
       } else if (!isOn && setupIndex == 2) {
+        charIndex += printSetupStep();
         if (mode == MODE_FACE) {
-          charIndex += lcd.print(auxForward ? "Right to left?" : "Left to right?");
+          charIndex += lcd.print(auxForward ? "Right-left" : "Left-right");
         } else if (mode == MODE_CUT) {
-          charIndex += lcd.print(dupr >= 0 ? "Pitch > 0, external" : "Pitch < 0, internal");
+          // Cut-off takes its direction from the sign of the pitch rather than from this
+          // question, so there is nothing here to change with the arrows.
+          charIndex += lcd.print(dupr >= 0 ? "Ext, pitch>0" : "Int, pitch<0");
         } else {
-          charIndex += lcd.print(auxForward ? "External?" : "Internal?");
+          charIndex += lcd.print(auxForward ? "External" : "Internal");
         }
+        // Nothing else on the panel says the arrows change the answer, and the question mark on
+        // its own reads as a yes/no that ON would answer.
+        if (mode != MODE_CUT) charIndex += lcd.print(" <>");
       } else if (!isOn && mode == MODE_TPR && setupIndex == 3) {
         // Only the tapered thread asks for this; a straight thread never sees the step.
+        charIndex += printSetupStep();
         if (numpadResult != 0) {
-          charIndex += lcd.print("Use ratio ");
+          charIndex += lcd.print("Taper ");
           charIndex += lcd.print(numpadToConeRatio(), 5);
           charIndex += lcd.print("?");
         } else {
-          charIndex += lcd.print("Taper ratio ");
+          charIndex += lcd.print("Taper ");
           charIndex += printNoTrailing0(coneRatio);
           charIndex += lcd.print("?");
         }
       } else if (!isOn && setupIndex == getLastSetupIndex()) {
+        charIndex += printSetupStep();
         long zOffset = getPassModeZStart() - z.pos;
         long xOffset = getPassModeXStart() - x.pos;
         charIndex += lcd.print("Go");
-        if (zOffset != 0) {
+        // The offsets say the tool is about to move before it does, which is what the
+        // confirmation is for. But an offset can be ten characters with its sign and unit, and
+        // two of them plus the step counter overrun the line - which wraps onto the position
+        // line below and corrupts it. Print each only while there is room, and keep the "?".
+        if (zOffset != 0 && charIndex + 10 <= 19) {
           charIndex += lcd.print(" ");
           charIndex += lcd.print(z.name);
           charIndex += printDeciMicrons(stepsToDu(&z, zOffset), 2);
         }
-        if (xOffset != 0) {
+        if (xOffset != 0 && charIndex + 10 <= 19) {
           charIndex += lcd.print(" ");
           charIndex += lcd.print(x.name);
           charIndex += printDeciMicrons(stepsToDu(&x, xOffset), 2);
@@ -1423,23 +1452,43 @@ void updateDisplay() {
         for (long i = 0; i < filled; i++) {
           charIndex += lcd.write(byte(255));
         }
+      } else if (!isOn && !inNumpad && setupIndex == 0) {
+        // The way in. With the stops set and nothing running there was nothing here at all, so
+        // the wizard behind the ON key was invisible - you had to already know it existed. This
+        // takes the line ahead of the angle and rpm readouts on purpose: in a pass mode, about to
+        // start, the next keypress matters more than the tacho.
+        //
+        // Not while the numpad is open: the line below echoes what is being typed, and that
+        // matters more than an instruction for something you have not asked for yet.
+        charIndex += lcd.print("ON to set up ");
+        charIndex += lcd.print(getLastSetupIndex());
+        charIndex += lcd.print(" steps");
       }
     } else if (mode == MODE_CONE) {
       if (numpadResult != 0 && setupIndex == 1) {
-        charIndex += lcd.print("Use ratio ");
+        charIndex += printSetupStep();
+        charIndex += lcd.print("Ratio ");
         charIndex += lcd.print(numpadToConeRatio(), 5);
         charIndex += lcd.print("?");
       } else if (!isOn && setupIndex == 1) {
-        charIndex += lcd.print("Use ratio ");
+        charIndex += printSetupStep();
+        charIndex += lcd.print("Ratio ");
         charIndex += printNoTrailing0(coneRatio);
         charIndex += lcd.print("?");
       } else if (!isOn && setupIndex == 2) {
-        charIndex += lcd.print(auxForward ? "External?" : "Internal?");
+        charIndex += printSetupStep();
+        charIndex += lcd.print(auxForward ? "External" : "Internal");
+        charIndex += lcd.print(" <>");
       } else if (!isOn && setupIndex == 3) {
+        charIndex += printSetupStep();
         charIndex += lcd.print("Go?");
       } else if (isOn && numpadResult == 0) {
         charIndex += lcd.print("Cone ratio ");
         charIndex += printNoTrailing0(coneRatio);
+      } else if (!isOn && !inNumpad && setupIndex == 0) {
+        charIndex += lcd.print("ON to set up ");
+        charIndex += lcd.print(getLastSetupIndex());
+        charIndex += lcd.print(" steps");
       }
     }
 
