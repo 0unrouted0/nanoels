@@ -187,11 +187,11 @@ Press the settings button when the controller is `off` to open the settings menu
 
 | # | Section | Holds |
 |---|---|---|
-| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel |
+| 1 | Preferences | X readout, spring passes, peck depth, flank infeed, retract and clearance distances, slot left reduction, manual step feel, spindle divisions, surface speed |
 | 2 | Z axis | direction, backlash, screw pitch, motor steps, pulley teeth, speeds, acceleration, max travel |
 | 3 | X axis | as Z |
 | 4 | A1 axis | as Z, plus whether it's fitted and whether it's rotary |
-| 5 | Spindle encoder | PPR, direction, pulley teeth, divider, dead-band, glitch filter |
+| 5 | Spindle encoder | PPR, direction, pulley teeth, divider, dead-band and its shape, glitch filter |
 | 6 | Handwheels | which are fitted, direction, PPR, pulse width, dead-band |
 | 7 | Joystick | fitted, debounce |
 | 8 | WiFi & updates | radio on/off, access PIN — see [WIFI.md](WIFI.md) |
@@ -296,6 +296,38 @@ When in threading mode and `off`, press the settings button to open the thread d
 ### Surface speed readout
 
 Press the display button to cycle the extra readouts: spindle angle, then RPM with surface speed (e.g. `1250rpm 98m/min`), then the large position display, then off. Surface speed shows the current cutting speed in m/min (or ft/min in inch and TPI modes) calculated from the spindle RPM and the tool diameter position. For accurate readings, X must be zeroed on the lathe centerline - see "Zeroing the axes" below.
+
+### Constant surface speed
+
+Cutting speed is what the tool actually feels, and it falls with diameter. The RPM that's right on 50mm stock gives a third of the speed on 16mm, and facing towards centre takes it to zero — which is why the finish goes off as you approach the middle of a faced surface.
+
+Set **Surface speed** in Preferences to your target in m/min and the RPM readout changes from showing what the speed *is* to showing what the spindle *should be doing*:
+
+```
+850rpm >620 +37%
+```
+
+850 RPM now, 620 wanted at this diameter, running 37% fast. Turn the spindle down until the percentage reads near zero. It updates live as the diameter changes, so it tracks a facing cut inward and steps between turning passes on its own.
+
+`^` in place of `>` means the target is above **Spindle max rpm** and has been capped — the lathe can't reach the speed this diameter wants, which is normal on small diameters and not a fault.
+
+Starting points with carbide: 30 m/min for tool steel, 100 for mild steel, 200 for aluminium, 60 for cast iron. High speed steel wants roughly a third of those. Set it to 0 to go back to the plain surface speed readout.
+
+**The controller can't set the speed for you.** There's no spindle output on this board and no free pin for one — every terminal is taken by the steppers, encoder, display and keypad. This tells you what to dial and you dial it.
+
+### Spindle indexing
+
+The encoder resolves a revolution far more finely than a chuck can be positioned by hand — 4000 counts is 0.09° — so it can stand in for the dividing head the lathe doesn't have.
+
+Set **Spindle divisions** in Preferences to the number of positions you want and the angle line becomes an index readout:
+
+```
+Idx 3/6 -2.4°
+```
+
+You're nearest mark 3 of 6, and 2.4° short of it. Turn the chuck until it reads `ON` and the buzzer sounds. Cut, then turn to the next mark and repeat. **Index tolerance** sets how close counts as arrived, in tenths of a degree; 0.5° is a sensible default, since a chuck turned by hand settles to a few tenths at best whatever the encoder can resolve.
+
+Paired with [automatic slotting](#automatic-slotting) this cuts hex flats, square drives, keyway sets and splines with no indexer — index, slot, index, slot. It replaces the plain angle display while it's on. Set divisions to 0 to turn it off.
 
 ### Large position display
 
