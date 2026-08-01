@@ -191,6 +191,10 @@ Use numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/51791
 
 The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
 
+**Hold it for half a second to open the settings menu.** A short press opens whatever screen the current mode claims for itself - in threading that's the [thread database](#thread-database), and in every other mode it's the settings menu too, since nothing else has claimed it yet.
+
+That split exists so a mode can have a screen of its own without losing the route to the settings menu. Threading previously took the short press for its database and left no way to reach settings at all without leaving the mode, which mattered because spring passes and flank infeed - both threading settings - live there.
+
 Press the settings button when the controller is `off` to open the settings menu. It opens on a directory of sections; move with the arrows and press play to enter one, and press stop to come back out.
 
 | # | Section | Holds |
@@ -299,7 +303,7 @@ Work through them in this order when setting up a machine: input tester and enco
 
 ### Thread database
 
-When in threading mode and `off`, press the settings button to open the thread database instead of the settings menu. Use up and down arrows to browse one at a time, left and right to jump by 10, or jump straight to a thread family with the numpad: `1` metric, `2` UNC/UNF, `3` BSPP, `4` trapezoidal, `5` ACME, `6` NPT. The database reopens on the last used thread. Press play to apply the selected thread - pitch and measurement system are set automatically and starts are reset to 1. Includes common metric coarse and fine, UNC, UNF, BSPP, metric trapezoidal (Tr), ACME and NPT threads. Note that trapezoidal, ACME and NPT presets only set the pitch - the correct form tool and, for NPT, a taper setup are still needed.
+When in threading mode and `off`, a **short** press of the settings button opens the thread database instead of the settings menu. Hold the same button for half a second to reach the settings menu; the database screen says `hold=menu` as a reminder. Use up and down arrows to browse one at a time, left and right to jump by 10, or jump straight to a thread family with the numpad: `1` metric, `2` UNC/UNF, `3` BSPP, `4` trapezoidal, `5` ACME, `6` NPT. The database reopens on the last used thread. Press play to apply the selected thread - pitch and measurement system are set automatically and starts are reset to 1. Includes common metric coarse and fine, UNC, UNF, BSPP, metric trapezoidal (Tr), ACME and NPT threads. Note that trapezoidal, ACME and NPT presets only set the pitch - the correct form tool and, for NPT, a taper setup are still needed.
 
 ### Surface speed readout
 

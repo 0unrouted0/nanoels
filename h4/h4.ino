@@ -211,6 +211,12 @@ bool buttonGearsPressed = false;
 bool buttonTurnPressed = false;
 bool buttonAPressed = false; // We saw the press of B_A, so its release is ours to handle
 unsigned long buttonAPressMs = 0; // Time B_A was pressed, to tell short and long presses apart
+bool buttonSettingsPressed = false; // Same, for the settings button's short and long press
+unsigned long buttonSettingsPressMs = 0;
+
+// How long a key must be held to count as a long press. One value for every button that has two
+// jobs, so the machine feels the same wherever the trick is used.
+const unsigned long BUTTON_HOLD_MS = 500;
 
 bool xRetracted = false; // X was moved away with the retract key, position to return to is stored below
 long xRetractReturnPos = 0;
@@ -989,6 +995,19 @@ const char* modeName() {
     case MODE_A1: return "A1";
     default: return "";
   }
+}
+
+// Whether this mode claims the short press of the settings button for a screen of its own.
+//
+// Threading is the only one so far: its short press opens the thread database. The long press
+// reaches the settings menu from anywhere, which is what makes the short press free to give away
+// - before that, thread mode had no route to the settings menu at all, so a threading setting
+// like spring passes or flank infeed meant leaving the mode to change it.
+//
+// A mode that grows a preset list or a page of its own adds itself here and to
+// enterSettingsScreen(), and nothing else has to move.
+bool modeHasOwnScreen() {
+  return isThreadMode();
 }
 
 // Whether pressing the same button again would land on a different mode. Gear hides XGEAR and
@@ -4340,6 +4359,14 @@ void updateSettingsDisplay() {
       charIndex += lcd.print(int(round(254000.0 / THREAD_PRESETS[threadPickerIndex].dupr)));
       charIndex += lcd.print("tpi");
     }
+    // This screen is where the settings button lands in thread mode, so it is where someone
+    // looking for the settings menu ends up. Say how to get there. Only when the pitch leaves
+    // room - a five-decimal metric pitch does not, and a wrapped line would overwrite the hints
+    // below it.
+    if (charIndex + 10 <= 20) {
+      while (charIndex < 10) charIndex += lcd.print(" ");
+      charIndex += lcd.print("hold=menu");
+    }
     printLcdSpaces(charIndex);
     lcd.setCursor(0, 3);
     charIndex = lcd.print("ON use, 1-6 groups");
@@ -5414,11 +5441,29 @@ void processKeypadEvent() {
       buttonAPressMs = millis();
     } else if (buttonAPressed) {
       buttonAPressed = false;
-      if (millis() - buttonAPressMs >= 500) {
+      if (millis() - buttonAPressMs >= BUTTON_HOLD_MS) {
         x.disabled = !x.disabled;
         updateEnable(&x);
       } else {
         xRetractToggle();
+      }
+    }
+  } else if (keyCode == B_SETTINGS) {
+    // Handled on release, because which of the two screens is wanted cannot be known until the
+    // key comes back up. The flag matters: pressing this button to leave the settings menu is
+    // consumed by the menu, and the release then arrives here with no press to match it.
+    if (isPress) {
+      buttonSettingsPressed = true;
+      buttonSettingsPressMs = millis();
+    } else if (buttonSettingsPressed) {
+      buttonSettingsPressed = false;
+      if (isOn) {
+        beep();
+      } else {
+        // Long press always reaches the settings menu. That is what frees the short press for
+        // each mode to claim - see modeHasOwnScreen().
+        bool held = millis() - buttonSettingsPressMs >= BUTTON_HOLD_MS;
+        enterSettingsScreen(!held && modeHasOwnScreen());
       }
     }
   }
@@ -5456,13 +5501,6 @@ void processKeypadEvent() {
     updateEnable(&z);
   } else if (keyCode == B_STEP) {
     buttonMoveStepPress();
-  } else if (keyCode == B_SETTINGS) {
-    if (isOn) {
-      beep();
-    } else {
-      // In thread mode the settings button opens the thread database instead.
-      enterSettingsScreen(isThreadMode());
-    }
   } else if (keyCode == B_REVERSE) {
     buttonReversePress();
   } else if (keyCode == B_MEASURE) {
