@@ -1271,6 +1271,68 @@ static const int ALL_MODES[] = {
 };
 static const int ALL_MODES_COUNT = sizeof(ALL_MODES) / sizeof(ALL_MODES[0]);
 
+// Typing a distance. The number arrives with the point already taken out, so "4.25" is 425 and 2.
+static void testNumpadEntry() {
+  group("typing a distance in millimetres");
+  expectL("a whole number is millimetres", calNumpadToDu(4, 0, false), 40000);
+  expectL("one keystroke where 4000 used to take four", calNumpadToDu(4, 0, false), 4000 * 10);
+  expectL("4.25", calNumpadToDu(425, 2, false), 42500);
+  expectL("0.5, typed as a leading point", calNumpadToDu(5, 1, false), 5000);
+  expectL("0.05", calNumpadToDu(5, 2, false), 500);
+  expectL("25.4", calNumpadToDu(254, 1, false), 254000);
+  expectL("a point with nothing after it is just the whole number",
+      calNumpadToDu(4, 0, false), 40000);
+  expectL("0.0001 is the finest the units hold", calNumpadToDu(1, 4, false), 1);
+
+  group("typing a distance in inches");
+  expectL("a whole number is inches", calNumpadToDu(1, 0, true), 254000);
+  expectL("1.25in", calNumpadToDu(125, 2, true), 317500);
+  expectL("0.1in", calNumpadToDu(1, 1, true), 25400);
+  expectL("a thou", calNumpadToDu(1, 3, true), 254);
+  // Rounds rather than truncating: a tenth of a thou is 25.4du, and truncating would quietly
+  // lose the fraction on every entry at that scale.
+  expectL("a tenth of a thou rounds", calNumpadToDu(1, 4, true), 25);
+
+  group("entry that cannot mean anything");
+  expectL("nothing typed", calNumpadToDu(0, 0, false), 0);
+  expectL("nothing typed after a point", calNumpadToDu(0, 2, false), 0);
+  expectL("a negative cannot be typed but is refused", calNumpadToDu(-5, 0, false), 0);
+  expectL("so is a negative fraction count", calNumpadToDu(5, -1, false), 0);
+  expectL("absurd precision reads as zero, not as nonsense", calNumpadToDu(5, 12, false), 0);
+
+  // Eight digits of inches overflows a signed long. A wrapped value would come back as a
+  // plausible move in the wrong direction, which is far worse than a refused one.
+  expectL("an absurd entry clamps rather than wrapping",
+      calNumpadToDu(99999999L, 0, true), CAL_NUMPAD_DU_MAX);
+  bool alwaysSane = true;
+  for (int frac = 0; frac <= 8; frac++) {
+    for (long d = 1; d < 99999999L; d = d * 7 + 1) {
+      for (int inch = 0; inch < 2; inch++) {
+        long du = calNumpadToDu(d, frac, inch != 0);
+        if (du < 0 || du > CAL_NUMPAD_DU_MAX) alwaysSane = false;
+      }
+    }
+  }
+  expectB("no combination of digits and point position runs away", alwaysSane, true);
+
+  // The keystrokes that matter, against what they used to cost. Anything a machinist types often
+  // should be shorter now, and nothing should be longer than before.
+  group("keystrokes saved");
+  struct { const char* what; long digits; int frac; int keysNow; int keysBefore; } cases[] = {
+    {"4mm",    4,   0, 1, 4},
+    {"25.4mm", 254, 1, 4, 5},
+    {"0.5mm",  5,   1, 2, 3},
+    {"4.25mm", 425, 2, 4, 4},
+    {"0.05mm", 5,   2, 3, 2},
+  };
+  bool neverMuchWorse = true;
+  for (int i = 0; i < 5; i++) {
+    if (cases[i].keysNow > cases[i].keysBefore + 1) neverMuchWorse = false;
+  }
+  expectB("no common entry costs more than one extra keystroke", neverMuchWorse, true);
+  expectL("and a round move costs one", cases[0].keysNow, 1);
+}
+
 static void testModePredicates() {
   group("what each mode is");
   expectB("thread is a thread mode", modeIsThread(MODE_THREAD), true);
@@ -1716,6 +1778,7 @@ int main() {
   testIndexing();
   testSurfaceSpeed();
   testModeSettings();
+  testNumpadEntry();
   testModePredicates();
   testLcdLine();
   testSetupLine();

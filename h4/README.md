@@ -203,6 +203,28 @@ Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce
 
 Use numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/517919/67f660f1-c6fa-4922-bf03-9f6571023806) to ![Icon9](https://github.com/kachurovskiy/nanoels/assets/517919/6ad6b4e4-5bf1-473f-93ed-65f6ee478d8f) to enter a custom step value. Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce78e4-4202-4642-9433-e61ca39de9d5) when the screen bottom line shows `Use 1.234mm?` will make the step equal to `1.234mm`.
 
+### Typing a distance
+
+Distances are typed in **millimetres**, or in inches when in inch mode, and **the backspace key is the decimal point**.
+
+| You want | You type |
+|---|---|
+| 4mm | `4` |
+| 0.5mm | `.5` or `0.5` |
+| 4.25mm | `4.25` |
+| 25.4mm | `25.4` |
+
+Entry used to be in whole microns, so 4mm meant typing `4000` — the smallest useful figure set the length of every figure, and a round move cost four keystrokes. The bottom line shows what your number comes to before you commit it, so a mistyped point is visible rather than silent.
+
+**A leading point works.** `.5` is 0.5mm; you don't need the leading zero. That is why the point is on this key and not on `+` or `-`, which only reach the numpad once a digit has already been typed.
+
+**Hold backspace to clear the number** and start again. There is no single-digit delete any more — the key does the point instead. On a short number, clearing and retyping is quicker than backing up.
+
+The same applies everywhere a distance is typed: moves, soft limits, coordinates, the pitch, and the settings menu. Two kinds of number are not distances and are unaffected:
+
+- **Threads per inch** — a count, not a distance, so it is typed whole.
+- **Counts and rates** — passes, motor steps, speeds and the like are plain numbers.
+
 ### Settings menu
 
 The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
@@ -227,7 +249,7 @@ Inside a section, up and down move one item at a time, left and right jump a pag
 
 Every value shows its unit next to it, both on the screen and in the web interface — `Now 800 steps`, `Now 3400 steps/s`, `Now 20 teeth`. Distances follow whichever measurement system is selected, so the same setting reads `2 mm` or `0.0787"` depending on the mode. The confirmation line does the same while you type, so `Use 300 ms?` can't be mistaken for microseconds.
 
-Distances (backlash, screw pitch) are entered in microns when in metric mode or thousandths of an inch when in inch mode. Speed and acceleration are entered in motor steps per second and steps per second squared - same units as the constants at the top of `h4.ino`. Press the settings button or off button to exit.
+Distances (backlash, screw pitch) are entered in millimetres, or inches in inch mode, using the decimal point on the backspace key - see [Typing a distance](#typing-a-distance). Speed and acceleration are entered in motor steps per second and steps per second squared - same units as the constants at the top of `h4.ino`. Press the settings button or off button to exit.
 
 After changing screw pitch or motor steps, re-zero the axes since the physical meaning of the stored positions changes.
 

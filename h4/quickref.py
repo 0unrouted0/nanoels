@@ -160,6 +160,10 @@ def page1():
         [P("It moves itself", S_CELL_B),
          P("Keep clear, know where the stop key is, and try anything new with the tool well away "
            "from the work.", S_CELL)],
+        [P("Typing a distance", S_CELL_B),
+         P("In millimetres, or inches in inch mode. <b>The backspace key is the decimal point</b> — "
+           "type <b>4</b> for 4mm, <b>.5</b> for half a millimetre, <b>25.4</b> for an inch. Hold "
+           "that key to clear the number and start again.", S_CELL)],
     ]
     story.append(numbered(intro, numw=20 * mm))
     story.append(Spacer(1, 7))

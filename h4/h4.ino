@@ -203,6 +203,10 @@ bool buttonAPressed = false; // We saw the press of B_A, so its release is ours 
 unsigned long buttonAPressMs = 0; // Time B_A was pressed, to tell short and long presses apart
 bool buttonSettingsPressed = false; // Same, for the settings button's short and long press
 unsigned long buttonSettingsPressMs = 0;
+// The backspace key carries the decimal point on a short press and clears the number on a long
+// one. It needs the same press/release pair, and it needs it on every screen that takes a number.
+bool buttonBackspacePressed = false;
+unsigned long buttonBackspacePressMs = 0;
 
 // How long a key must be held to count as a long press. One value for every button that has two
 // jobs, so the machine feels the same wherever the trick is used.
@@ -221,6 +225,8 @@ bool joystickDirPressed[4] = {false, false, false, false};
 bool inNumpad = false;
 int numpadDigits[20];
 int numpadIndex = 0;
+// Digits typed before the decimal point, or -1 when none has been entered.
+int numpadPointAt = -1;
 
 bool isOn = false;
 bool nextIsOn; // isOn value that should be applied asap
@@ -1053,9 +1059,9 @@ void splashError(const char* text) {
 }
 
 // Deci-microns for a number just typed on the numpad, in the current measurement system.
-long numpadRawToDu(long raw) {
-  return calNumpadRawToDu(measure == MEASURE_INCH, raw);
-}
+// Deci-microns for a number typed on the numpad. Declared here because the display code above
+// uses it; the numpad state it reads lives further down.
+long numpadToDu();
 
 // Big 3x2-cell digit font for the large DRO screen. Since the LCD only has 8 custom character
 // slots, shared with the normal screen's icons, the character set is swapped when (de)entering it.
@@ -3117,24 +3123,45 @@ void numpadPress(int digit) {
   // keystroke and only the most recent digit survived.
   if (!inNumpad) {
     numpadIndex = 0;
+    numpadPointAt = -1;
     inNumpad = true;
   }
   numpadDigits[numpadIndex] = digit;
   if (numpadIndex < 7) {
     numpadIndex++;
   } else {
+    // Wrapped past what the buffer holds, so the number starts again - and the point has to go
+    // with it, or it would sit beyond the digits that remain.
     numpadIndex = 0;
+    numpadPointAt = -1;
   }
 }
 
-void numpadBackspace() {
-  if (inNumpad && numpadIndex > 0) {
-    numpadIndex--;
+// The decimal point, on the backspace key. It works as a leading point - "0.5" needs no leading
+// zero - because backspace already starts numpad entry whether or not a digit has been typed,
+// which is exactly what plus and minus do not do.
+void numpadPoint() {
+  if (!inNumpad) {
+    numpadIndex = 0;
+    numpadPointAt = -1;
+    inNumpad = true;
   }
+  // A second point is ignored rather than moved: pressing it twice by accident should not quietly
+  // turn 4.25 into 425.
+  if (numpadPointAt < 0) {
+    numpadPointAt = numpadIndex;
+  }
+}
+
+// Digits typed after the point. Zero when there is no point, or when one has just been pressed
+// and nothing has followed it yet.
+int numpadFracDigits() {
+  return numpadPointAt < 0 ? 0 : numpadIndex - numpadPointAt;
 }
 
 void resetNumpad() {
   numpadIndex = 0;
+  numpadPointAt = -1;
   // No entry is in progress any more, so the next digit starts a fresh number rather than
   // appending to the one just consumed.
   inNumpad = false;
@@ -3146,6 +3173,27 @@ long getNumpadResult() {
     result += numpadDigits[i] * pow(10, numpadIndex - 1 - i);
   }
   return result;
+}
+
+// Deci-microns for whatever is on the numpad, honouring the decimal point. The single conversion
+// for every screen that takes a distance, so the main screen, the settings menu and their preview
+// lines cannot disagree about what a typed number means.
+long numpadToDu() {
+  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), measure != MEASURE_METRIC);
+}
+
+// Whether the screen in front of you takes a typed number at all. The decimal point and the
+// hold-to-clear are handled centrally, so they have to ask rather than assume: the thread
+// database and the settings directory are lists to scroll, and a toggle has nothing to type into.
+bool numpadAcceptsInput() {
+  if (inThreadPicker) {
+    return false;
+  }
+  if (inSettings) {
+    return settingsSection >= 0 && !settingIsToggle(settingsIndex) &&
+           !settingIsList(settingsIndex) && !settingIsAction(settingsIndex);
+  }
+  return true;
 }
 
 void numpadPlusMinus(bool plus) {
@@ -3162,14 +3210,12 @@ long numpadToDeciMicrons() {
   if (result == 0) {
     return 0;
   }
-  if (measure == MEASURE_INCH) {
-    result = result * 254;
-  } else if (measure == MEASURE_TPI) {
-    result = round(254000.0 / result);
-  } else { // Metric
-    result = result * 10;
+  // Threads per inch are the one exception: a TPI figure is a count rather than a distance, so it
+  // stays whole and a decimal point in it would mean nothing.
+  if (measure == MEASURE_TPI) {
+    return round(254000.0 / result);
   }
-  return result;
+  return numpadToDu();
 }
 
 float numpadToConeRatio() {
@@ -3208,7 +3254,9 @@ bool processNumpad(int keyCode) {
     numpadPress(9);
     inNumpad = true;
   } else if (keyCode == B_BACKSPACE) {
-    numpadBackspace();
+    // Short press is the decimal point; holding it clears the number. Handled on release in
+    // processKeypadEvent, so by the time it reaches here the decision has been made.
+    numpadPoint();
     inNumpad = true;
   } else if (inNumpad && (keyCode == B_PLUS || keyCode == B_MINUS)) {
     numpadPlusMinus(keyCode == B_PLUS);
@@ -3764,11 +3812,14 @@ const char* settingsWriteValue(int index, long value) {
 // Commits the numpad value to the currently selected settings menu item and persists it.
 void commitSetting() {
   long raw = getNumpadResult();
+  // Read the distance before the numpad is cleared: the decimal point lives in the numpad state,
+  // so converting afterwards would lose it and store a value a hundred times too large.
+  long du = numpadToDu();
   resetNumpad();
-  // Distances are typed in microns or thou, everything else as a plain number.
+  // Distances are typed in millimetres or inches, everything else as a plain number.
   long value = raw;
   if (settingsUsesDu()) {
-    value = numpadRawToDu(raw);
+    value = du;
   } else if (settingUsesSpeed(settingsIndex)) {
     value = cssFromDisplay(raw, measure != MEASURE_METRIC);
   }
@@ -4335,8 +4386,6 @@ void processSettingsKeypress(int keyCode) {
   bool typed = !settingsIsToggle() && !settingIsList(settingsIndex) && !settingIsAction(settingsIndex);
   if (digit >= 0) {
     if (typed) numpadPress(digit);
-  } else if (keyCode == B_BACKSPACE) {
-    if (typed) numpadBackspace();
   } else if (keyCode == B_UP) {
     settingsMove(-1);
   } else if (keyCode == B_DOWN) {
@@ -4529,7 +4578,7 @@ void updateSettingsDisplay() {
   } else if (numpadIndex > 0) {
     charIndex = lcd.print("Use ");
     if (settingsUsesDu()) {
-      charIndex += printDeciMicrons(numpadRawToDu(getNumpadResult()), 5);
+      charIndex += printDeciMicrons(numpadToDu(), 5);
       charIndex += lcd.print(measure == MEASURE_METRIC ? " mm" : "\"");
     } else if (settingUsesSpeed(settingsIndex)) {
       // Echoed as typed rather than converted: the figure being confirmed has to be the one that
@@ -4548,7 +4597,9 @@ void updateSettingsDisplay() {
     }
     charIndex += lcd.print("?");
   } else if (settingsUsesDu()) {
-    charIndex = lcd.print(measure == MEASURE_INCH ? "Type thou, then ON" : "Type microns, ON");
+    // The decimal point lives on the backspace key, which is not something anyone would guess,
+    // so the hint names the key rather than only the unit.
+    charIndex = lcd.print(measure == MEASURE_INCH ? "Inches, < is the ." : "mm, < is the point");
   } else if (settingUsesSpeed(settingsIndex)) {
     charIndex = lcd.print(measure == MEASURE_METRIC ? "Type m/min, then ON" : "Type ft/min, ON");
   } else {
@@ -4740,8 +4791,7 @@ void calOnPress() {
           beep();
           break;
         }
-        long raw = getNumpadResult();
-        long actualDu = numpadRawToDu(raw);
+        long actualDu = numpadToDu();
         long nominalDu = CAL_TEST_DU[calParamIndex];
         resetNumpad();
         if (actualDu <= 0) {
@@ -5083,7 +5133,6 @@ void processCalKeypress(int keyCode, bool isPress) {
 
   int digit = keyCodeToDigit(keyCode);
   if (digit >= 0) numpadPress(digit);
-  else if (keyCode == B_BACKSPACE) numpadBackspace();
   else if (keyCode == B_LEFT) calAdjust(-1);
   else if (keyCode == B_RIGHT) calAdjust(1);
   else if (keyCode == B_MINUS) calBack();
@@ -5211,7 +5260,7 @@ void updateCalDisplay() {
       } else if (calStep == 2) {
         charIndex = lcd.print(measure == MEASURE_INCH ? "Thou: " : "Microns: ");
         if (numpadIndex > 0) {
-          charIndex += printDeciMicrons(numpadRawToDu(getNumpadResult()), 5);
+          charIndex += printDeciMicrons(numpadToDu(), 5);
         }
       } else {
         charIndex = lcd.print("New screw pitch");
@@ -5434,6 +5483,30 @@ void processKeypadEvent() {
   bitWrite(keyCode, 7, 0);
   bool isPress = bitRead(event, 7) == 1; // 1 - press, 0 - release
   keypadTimeUs = micros();
+
+  // The backspace key is the decimal point on a short press and clears the number on a long one.
+  // Handled here, ahead of the screen dispatch, so the main screen, the settings menu and the
+  // calibration routines all get both without three copies of the logic - and so the timing is
+  // the same wherever you are.
+  //
+  // The input tester is the exception: it exists to report key codes and must go on seeing this
+  // key like any other.
+  if (keyCode == B_BACKSPACE && !(inCal && calRoutine == CAL_INPUTS)) {
+    if (isPress) {
+      buttonBackspacePressed = true;
+      buttonBackspacePressMs = millis();
+    } else if (buttonBackspacePressed) {
+      buttonBackspacePressed = false;
+      if (!numpadAcceptsInput()) {
+        // Nothing to type into on this screen, so neither meaning applies.
+      } else if (millis() - buttonBackspacePressMs >= BUTTON_HOLD_MS) {
+        resetNumpad();
+      } else {
+        numpadPoint();
+      }
+    }
+    return;
+  }
 
   // Calibration screen swallows all keys, and unlike the settings screens it needs releases
   // too: the travel routines jog with the arrow keys and the input tester exits on a hold.

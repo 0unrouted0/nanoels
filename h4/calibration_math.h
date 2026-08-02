@@ -180,11 +180,32 @@ inline bool calRpmAccumulate(int* index, int delta, long rpmBulk) {
   return true;
 }
 
-// Numpad entry is in whole microns in metric and whole thou in imperial, both converted to
-// deci-microns. One definition, because the settings menu, the calibration routines and their
-// preview lines all have to agree on what a typed number means.
-inline long calNumpadRawToDu(bool inchMode, long raw) {
-  return inchMode ? raw * 254 : raw * 10;
+// A typed number converted to deci-microns. Metric entry is in millimetres and imperial in
+// inches - the units a drawing states - with an optional decimal point.
+//
+// Entry used to be in whole microns, so four millimetres cost four keystrokes: 4000. The smallest
+// useful figure set the length of every figure. Typing 4 for 4mm and 4.25 for 4.25mm is both
+// shorter and what you would write down.
+//
+// The number arrives with the point already taken out: "4.25" is digits 425 and fracDigits 2.
+// Kept in integers because the scale is exact in both systems, where a float would turn 0.1mm
+// into something that is not quite 1000du and leave it there.
+//
+// Clamped rather than allowed to wrap. Eight digits of inches overflows a signed long, and a
+// wrapped value would come back as a plausible move in the wrong direction rather than an error.
+#define CAL_NUMPAD_DU_MAX 100000000L // 10 metres, past any lathe and any axis limit
+
+inline long calNumpadToDu(long digits, int fracDigits, bool inchMode) {
+  if (digits <= 0 || fracDigits < 0) {
+    return 0;
+  }
+  long long num = (long long)digits * (inchMode ? 254000LL : 10000LL);
+  long long den = 1;
+  for (int i = 0; i < fracDigits && den <= 100000000LL; i++) {
+    den *= 10;
+  }
+  long long v = (num + den / 2) / den; // round half up, so 0.0001in is 25du and not 25.4 truncated
+  return v > CAL_NUMPAD_DU_MAX ? CAL_NUMPAD_DU_MAX : (long)v;
 }
 
 // ---------------------------------------------------------------------------
