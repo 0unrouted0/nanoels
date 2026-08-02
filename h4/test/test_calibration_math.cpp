@@ -1271,51 +1271,6 @@ static const int ALL_MODES[] = {
 };
 static const int ALL_MODES_COUNT = sizeof(ALL_MODES) / sizeof(ALL_MODES[0]);
 
-// Typing a distance on the main screen. The jog step is the scale, so a round move takes a round
-// number of keystrokes instead of a number padded out with zeros.
-static void testNumpadEntry() {
-  group("typing a distance");
-  const long MM = 10000, TENTH = 1000, HUNDREDTH = 100;   // metric jog steps, in deci-microns
-  const long INCH_10 = 25400, INCH_100 = 2540, THOU = 254; // imperial ones
-
-  expectL("4 at a 1mm step is 4mm", calNumpadToDu(4, MM), 40000);
-  expectL("which used to take four keystrokes", calNumpadRawToDu(false, 4000), 40000);
-  expectL("425 at a 0.01mm step is 4.25mm", calNumpadToDu(425, HUNDREDTH), 42500);
-  expectL("25 at a 0.1mm step is 2.5mm", calNumpadToDu(25, TENTH), 25000);
-
-  // At the finest imperial step this is exactly what it always did - a thou is 254du either way -
-  // so nobody working in inches has to relearn anything.
-  expectL("100 at a 0.001in step is 0.1in", calNumpadToDu(100, THOU), 25400);
-  expectL("matching the old thou entry", calNumpadRawToDu(true, 100), 25400);
-  expectL("4 at a 0.1in step is 0.4in", calNumpadToDu(4, INCH_10), 101600);
-  expectL("125 at a 0.01in step is 1.25in", calNumpadToDu(125, INCH_100), 317500);
-
-  expectL("zero is zero", calNumpadToDu(0, MM), 0);
-  expectL("a negative cannot be typed but is refused anyway", calNumpadToDu(-5, MM), 0);
-  expectL("no step is no distance", calNumpadToDu(4, 0), 0);
-
-  // Eight digits at a 0.1 inch step overflows a signed long. A wrapped value would come back as a
-  // plausible move in the wrong direction, which is far worse than a refused one.
-  expectL("an absurd entry clamps rather than wrapping",
-      calNumpadToDu(99999999L, INCH_10), CAL_NUMPAD_DU_MAX);
-  bool alwaysSane = true;
-  const long steps[] = {MM, TENTH, HUNDREDTH, INCH_10, INCH_100, THOU};
-  for (int s = 0; s < 6; s++) {
-    for (long typed = 1; typed < 99999999L; typed = typed * 7 + 1) {
-      long du = calNumpadToDu(typed, steps[s]);
-      if (du < 0 || du > CAL_NUMPAD_DU_MAX) alwaysSane = false;
-    }
-  }
-  expectB("no typed value produces a negative or runaway distance", alwaysSane, true);
-  expectL("just inside the ceiling is exact", calNumpadToDu(10000, MM), 100000000L);
-  expectL("just past it clamps", calNumpadToDu(10001, MM), CAL_NUMPAD_DU_MAX);
-
-  // Settings are typed on their own screen and are unchanged - a backlash figure is still microns
-  // and must not start following the jog step.
-  expectL("settings entry still takes microns", calNumpadRawToDu(false, 65), 650);
-  expectL("and thou in inch mode", calNumpadRawToDu(true, 5), 1270);
-}
-
 static void testModePredicates() {
   group("what each mode is");
   expectB("thread is a thread mode", modeIsThread(MODE_THREAD), true);
@@ -1761,7 +1716,6 @@ int main() {
   testIndexing();
   testSurfaceSpeed();
   testModeSettings();
-  testNumpadEntry();
   testModePredicates();
   testLcdLine();
   testSetupLine();

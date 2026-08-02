@@ -187,30 +187,6 @@ inline long calNumpadRawToDu(bool inchMode, long raw) {
   return inchMode ? raw * 254 : raw * 10;
 }
 
-// On the main screen a typed number is in units of the jog step instead. Entering it in microns
-// meant four keystrokes to move four millimetres - "4000" - which is most of a number to say a
-// round figure. The step is already on the top line and is already the control you reach for when
-// deciding how precisely to move, so it doubles as the scale: at a step of 1.00 you type 4.
-//
-// Both systems come out right without a special case, because the step is itself held in
-// deci-microns and already switches between the metric and imperial ladders. At the finest
-// imperial step this is exactly the old behaviour - 254du per unit is a thou either way.
-//
-// Clamped rather than allowed to wrap: eight typed digits times a 0.1 inch step overflows a
-// signed long, and a wrapped value would come back as a plausible-looking move in the wrong
-// direction rather than as an obvious error.
-#define CAL_NUMPAD_DU_MAX 100000000L // 10 metres, past any lathe and any axis limit
-
-inline long calNumpadToDu(long typed, long moveStepDu) {
-  if (typed <= 0 || moveStepDu <= 0) {
-    return 0;
-  }
-  if (typed > CAL_NUMPAD_DU_MAX / moveStepDu) {
-    return CAL_NUMPAD_DU_MAX;
-  }
-  return typed * moveStepDu;
-}
-
 // ---------------------------------------------------------------------------
 // Figures derived from the settings
 // ---------------------------------------------------------------------------

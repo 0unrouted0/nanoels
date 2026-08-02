@@ -203,28 +203,6 @@ Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce
 
 Use numpad buttons ![Icon0](https://github.com/kachurovskiy/nanoels/assets/517919/67f660f1-c6fa-4922-bf03-9f6571023806) to ![Icon9](https://github.com/kachurovskiy/nanoels/assets/517919/6ad6b4e4-5bf1-473f-93ed-65f6ee478d8f) to enter a custom step value. Pressing ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce78e4-4202-4642-9433-e61ca39de9d5) when the screen bottom line shows `Use 1.234mm?` will make the step equal to `1.234mm`.
 
-**The step is also the scale for anything you type.** See below.
-
-### Typing a distance
-
-A number typed on the main screen is in units of the current step, and the bottom line shows what that comes to before you commit it.
-
-| Step | You type | You get |
-|---|---|---|
-| `1mm` | `4` | 4mm |
-| `0.1mm` | `25` | 2.5mm |
-| `0.01mm` | `425` | 4.25mm |
-| `0.001"` | `100` | 0.1" |
-
-That is four keystrokes saved on a round move: 4mm used to be `4000`, because entry was in whole microns. The step is already on the top line and is already the control you reach for when deciding how finely to move, so it does double duty as the scale.
-
-It applies wherever a typed number means a distance — a move, a soft limit, a coordinate, and the pitch. Two things it does not change:
-
-- **Threads per inch.** A TPI figure is a count, not a distance, so it is still typed whole.
-- **The settings menu.** Backlash, screw pitch and the rest are still typed in microns, or thousandths of an inch in imperial mode. Those screens say which they want on the bottom line.
-
-To set a step finer than the one you are on, cycle down with ![IconSteps](https://github.com/kachurovskiy/nanoels/assets/517919/52ce78e4-4202-4642-9433-e61ca39de9d5) first — at `0.01mm` you can type `50` to get `0.5mm`, but at `1mm` the smallest you can type is `1mm`.
-
 ### Settings menu
 
 The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
