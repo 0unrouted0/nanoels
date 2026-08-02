@@ -138,7 +138,7 @@ MODES = [
 ]
 
 
-def page1():
+def sec_overview():
     story = []
 
     story.append(Paragraph("What this is", S_H2))
@@ -160,17 +160,17 @@ def page1():
         [P("It moves itself", S_CELL_B),
          P("Keep clear, know where the stop key is, and try anything new with the tool well away "
            "from the work.", S_CELL)],
-        [P("Typing numbers", S_CELL_B),
-         P("In millimetres, or inches in inch mode, and <b>the backspace key is the decimal "
-           "point</b> — type <b>4</b> for 4mm and <b>.5</b> for half a millimetre. Which unit each "
-           "job wants is on page 3.", S_CELL)],
     ]
     story.append(numbered(intro, numw=20 * mm))
-    story.append(Spacer(1, 7))
+    return story
 
-    story.append(Paragraph("Choosing what it does", S_H2))
+
+def sec_modes():
+    story = [Paragraph("Choosing what it does", S_H2)]
     story.append(P("Each job has a key, shown in the table below. Two keys have a second job behind "
-                   "them: press the same key again to reach it, marked <b>&#215;2</b>.", S_DIM))
+                   "them: press the same key again to reach it, marked <b>&#215;2</b>. What unit "
+                   "each job wants its numbers in is on page 1, along with the ratios the two taper "
+                   "jobs ask for.", S_DIM))
     story.append(Spacer(1, 3))
     story.append(Table([[icon("IconM", 13),
                          P("steps through the rest:  "
@@ -194,9 +194,11 @@ def page1():
         data.append([P(name, S_CELL_B), P(shown, S_CELL), icon_key(key[0], key[1]),
                      P(what, S_CELL), P(stops, S_CELL), P(settings, S_CELL)])
     story.append(zebra(data, [22 * mm, 13 * mm, 15 * mm, None, 15 * mm, 43 * mm]))
-    story.append(Spacer(1, 7))
+    return story
 
-    story.append(Paragraph("Running one of the automatic jobs", S_H2))
+
+def sec_wizard():
+    story = [Paragraph("Running one of the automatic jobs", S_H2)]
     wiz = [
         [P("1", S_CELL_B),
          icon_row(["IconLimitLeft", "IconLimitRight", "IconLimitUp", "IconLimitDown"], 10, gap=0.8),
@@ -224,9 +226,11 @@ def page1():
                    "ordinary 60° thread the depth is <b>0.6134 × pitch</b> measured inwards from "
                    "the surface, so an M10×1.5 goes 0.92mm deep. If the cross slide is set to read "
                    "diameters rather than distance from centre, put in twice that.", S_NOTE))
-    story.append(Spacer(1, 8))
+    return story
 
-    story.append(Paragraph("Reading the screen", S_H2))
+
+def sec_screen():
+    story = [Paragraph("Reading the screen", S_H2)]
     lcd_rows = [[P("THRD* off step 1.00", S_LCD)], [P("Pitch 1.50mm x2", S_LCD)],
                 [P("Z 12.345 X 25.400", S_LCD)], [P("3/3 Go Z-5.00mm?", S_LCD)]]
     lcd = Table(lcd_rows, colWidths=[62 * mm])
@@ -353,7 +357,7 @@ SECTIONS2 = [
 ]
 
 
-def page2():
+def sec_setup():
     story = [Paragraph("Setting up a new machine", S_H2)]
     story.append(P("Flash the firmware, then choose millimetres or inches with the measure key. The "
                    "controller has to be told about your lathe before it can be accurate, and it "
@@ -375,9 +379,11 @@ def page2():
                    "USB, send a single <b>$</b>, and it prints every setting as a list of lines you "
                    "can keep in a text file. Paste them back to restore. The same file can be "
                    "downloaded from the web page.", S_NOTE))
-    story.append(Spacer(1, 8))
+    return story
 
-    story.append(Paragraph("Settings that describe your lathe", S_H2))
+
+def sec_settings():
+    story = [Paragraph("Settings that describe your lathe", S_H2)]
     story.append(P("<b>Hold</b> the settings key to open the menu. Everything here describes the "
                    "machine itself, and you will mostly set it once. Anything to do with one "
                    "particular job — how many passes, how much clearance — lives on that job's own "
@@ -474,7 +480,7 @@ UNITS = [
 ]
 
 
-def page3():
+def sec_typing():
     story = [Paragraph("Typing numbers into it", S_H2)]
     story.append(P("Digits fill in from the left, so <b>4</b> then <b>2</b> is 42. "
                    "<b>The backspace key is the decimal point</b>, and it works as a leading point "
@@ -499,14 +505,15 @@ def page3():
                    "threads per inch at any time — it changes how figures are shown and typed, "
                    "never what the machine has stored, so nothing moves and nothing is lost. Set it "
                    "to match the drawing in front of you.", S_DIM))
-    story.append(Spacer(1, 8))
+    return story
 
-    story.append(Paragraph("Every thread it knows", S_H2))
+
+def sec_threads():
+    story = [Paragraph("Every thread it knows", S_H2)]
     story.append(P("Choose one from the machine and the feed is set for you. <b>Depth</b> is how far "
-                   "in from the surface the tool has to go, in millimetres, measured on the radius "
-                   "— that is what the up limit is for, and it is the one thing the controller "
-                   "cannot work out for itself. If the cross slide is set to read diameters, put in "
-                   "twice the figure shown.", S_BODY))
+                   "in the tool has to go, in millimetres on the radius — that is what the up limit "
+                   "is for, and the one thing the controller cannot work out for itself. In "
+                   "diameter readout, put in twice the figure shown.", S_BODY))
     story.append(Spacer(1, 3))
 
     cols = thread_columns()
@@ -527,16 +534,19 @@ def page3():
                    "is cut to the same depth outwards from the bore. Trapezoidal and ACME include "
                    "the usual root clearance; taper pipe threads are deeper than they look because "
                    "the form is truncated rather than pointed.", S_DIM))
-    story.append(Spacer(1, 7))
+    return story
 
-    story.append(Paragraph("Cutting one of them", S_H2))
+
+def sec_thread_howto():
+    story = [Paragraph("Cutting a thread", S_H2)]
     tips = [
         [P("1", S_CELL_B), P("Pick the thread from the machine's own list — press the settings key "
                              "briefly while in threading, then choose it. That sets the feed.", S_CELL)],
         [P("2", S_CELL_B), P("Touch the tool on the outside of the bar and zero the cross slide. "
                              "Set the <b>down</b> limit there: that is the surface.", S_CELL)],
-        [P("3", S_CELL_B), P("Wind in by the depth from the table and set the <b>up</b> limit. That "
-                             "is full thread depth. In diameter readout, wind in twice the figure.", S_CELL)],
+        [P("3", S_CELL_B), P("Wind in by the depth from the thread table overleaf and set the "
+                             "<b>up</b> limit. That is full thread depth. In diameter readout, wind "
+                             "in twice the figure.", S_CELL)],
         [P("4", S_CELL_B), P("Set the two length limits, leaving room at the far end for the tool "
                              "to come out — a run-out groove if the thread ends against a shoulder.",
                              S_CELL)],
@@ -547,16 +557,14 @@ def page3():
     return story
 
 
-def page4():
+def sec_speeds():
     mats = read_materials()
     story = []
     story.append(Paragraph("Cutting speeds", S_H2))
-    story.append(P("For setting the spindle yourself. Metres per minute measured at the surface of "
-                   "the work, not the spindle speed — the two are only the same on a one-metre bar. "
-                   "Conservative starting points for turning rather than limits: depth of cut, how "
-                   "rigid the setup is and whether you are using coolant all matter as well. Work "
-                   "up from these while the finish and the swarf still look happy, and drop to "
-                   "roughly half for parting off.", S_BODY))
+    story.append(P("For setting the spindle yourself. Metres per minute at the <b>surface</b> of the "
+                   "work, not spindle rpm. These are starting points for turning, not limits — work "
+                   "up from them while the finish and the swarf still look happy, and halve them "
+                   "for parting off.", S_BODY))
     story.append(Spacer(1, 3))
 
     half = (len(mats) + 1) // 2
@@ -573,12 +581,15 @@ def page4():
     # The grid does the arithmetic for you, which is the whole point when you are standing at the
     # machine with a bar in the chuck and a speed chart on the wall.
     story.append(Paragraph("Spindle speed for that cutting speed", S_H2))
-    story.append(P("rpm = 318 &#215; cutting speed &#247; diameter in mm. Read it off here instead: "
-                   "the diameter you are cutting down the side, the speed from the table above "
-                   "across the top. Round down to whatever your lathe actually offers.", S_BODY))
+    story.append(P("rpm = 318 &#215; cutting speed &#247; diameter in mm, or read it off here: "
+                   "diameter down the side, metres per minute across the top. Round down to "
+                   "whatever your lathe offers — anything above its top speed just means run it "
+                   "flat out, which small diameters usually want.", S_BODY))
     story.append(Spacer(1, 3))
     speeds = [20, 30, 60, 90, 120, 200]
-    diams = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100]
+    # From 10mm up. Below that every figure is past what a lathe of this size will turn, so the
+    # row would only say "flat out" six times.
+    diams = [10, 16, 20, 25, 32, 40, 50, 63, 80, 100]
     head = [P("&#216; mm", S_KEY)] + [P("%d" % s, S_KEY) for s in speeds]
     data = [head]
     for d in diams:
@@ -590,15 +601,13 @@ def page4():
         data.append(row)
     colw = [16 * mm] + [None] * len(speeds)
     story.append(zebra(data, colw))
-    story.append(Spacer(1, 3))
-    story.append(P("Top row is metres per minute. Anything above your lathe's top speed simply "
-                   "means run it flat out — small diameters usually want more than the machine has.",
-                   S_DIM))
-    story.append(Spacer(1, 8))
+    return story
 
-    # Taper ratios feed the cone and tapered-thread modes directly, and are the sort of number
-    # nobody remembers.
-    story.append(Paragraph("Taper ratios", S_H2))
+
+# Taper ratios feed the cone and tapered-thread setups directly, and are the sort of number nobody
+# remembers, so they sit beside the modes that ask for one.
+def sec_tapers():
+    story = [Paragraph("Taper ratios", S_H2)]
     story.append(P("What to type when the taper or tapered-thread setup asks for a ratio. It is "
                    "the change in <b>diameter</b> per unit of length — (large &#8722; small) &#247; "
                    "length — so a taper quoted as 1 in 16 is entered as 0.0625.", S_BODY))
@@ -629,9 +638,11 @@ def page4():
     story.append(P("Working from an angle instead: ratio = 2 &#215; tan(half the included angle). "
                    "Cutting a taper on the outside and a matching socket needs the same ratio for "
                    "both — the mode does not care which way round you are cutting.", S_DIM))
-    story.append(Spacer(1, 8))
+    return story
 
-    story.append(Paragraph("Using it from a phone", S_H2))
+
+def sec_phone():
+    story = [Paragraph("Using it from a phone", S_H2)]
     wifi = [
         [P("1", S_CELL_B), P("Settings &#8594; WiFi &#8594; <b>Enabled</b> = yes. Change the "
                              "<b>Access PIN</b> from the default first — anyone who can join the "
@@ -648,12 +659,46 @@ def page4():
     return story
 
 
+# ---------------------------------------------------------------------------
+# The order the sheet is read in
+# ---------------------------------------------------------------------------
+#
+# Once through, the way a first day goes: work out what the thing is and how to read its screen,
+# tell it about your lathe, then start cutting. The lookup tables land last, because those are the
+# pages you flip back to rather than read.
+#
+# Two placements are deliberate. Typing goes on page 1 beside the screen, since every later
+# instruction assumes you can put a number in. The taper table follows it rather than sitting with
+# the other lookup tables: the units table three inches above says a taper is a bare ratio, and the
+# next thing you want is the ratio for a Morse 2.
+
+PAGES = [
+    ("What it is, and what to type into it",
+     [sec_overview, sec_screen, sec_typing, sec_tapers]),
+    ("Telling it about your lathe",
+     [sec_setup, sec_settings, sec_phone]),
+    ("Choosing a job and running it",
+     [sec_modes, sec_wizard, sec_thread_howto]),
+    ("Threads it knows, and speeds to cut them at",
+     [sec_threads, sec_speeds]),
+]
+
+
+def compose():
+    """Each page is its sections, spaced apart. Sections do not know where they will land."""
+    pages = []
+    for _, sections in PAGES:
+        story = []
+        for i, section in enumerate(sections):
+            if i:
+                story.append(Spacer(1, 8))
+            story.extend(section())
+        pages.append(story)
+    return pages
+
+
 if __name__ == "__main__":
     import sys
     build(sys.argv[1], "NanoEls H4  ·  Getting Started",
-          [page1(), page2(), page3(), page4()],
-          ["What it does, and how to ask for it",
-           "Setting up your lathe",
-           "Typing numbers, and every thread it knows",
-           "Speeds, tapers and the web page"],
+          compose(), [subtitle for subtitle, _ in PAGES],
           "Settings key: short press = this job's settings   ·   hold it for the main menu")
