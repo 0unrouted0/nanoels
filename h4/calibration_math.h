@@ -208,6 +208,20 @@ inline long calNumpadToDu(long digits, int fracDigits, bool inchMode) {
   return v > CAL_NUMPAD_DU_MAX ? CAL_NUMPAD_DU_MAX : (long)v;
 }
 
+// The same typed number as a plain value, with its point applied and no unit attached: digits 425
+// and two fractional digits is 4.25.
+//
+// For the two figures on the machine that take a decimal but are not distances - a taper ratio and
+// a thread count - so there is nothing to convert into millimetres or inches. Both are used as
+// floats downstream anyway, which is why this one does not stay in integers.
+inline double calNumpadValue(long digits, int fracDigits) {
+  double v = (double)digits;
+  for (int i = 0; i < fracDigits && i < 9; i++) {
+    v /= 10.0;
+  }
+  return v;
+}
+
 // ---------------------------------------------------------------------------
 // Figures derived from the settings
 // ---------------------------------------------------------------------------

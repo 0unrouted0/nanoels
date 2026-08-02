@@ -364,6 +364,14 @@ inline bool settingUsesSpeed(int index) {
   return SETTINGS[index].kind == SETTING_GLOBAL_SPEED;
 }
 
+// Whether a decimal point can be typed into this item. Distances are held in deci-microns and take
+// one. Everything else is a whole number where it is stored - a pass count, a motor's steps per
+// revolution, a surface speed in whole m/min - and a point typed into one of those would be dropped
+// somewhere between the screen and the write, which is worse than the key refusing it.
+inline bool settingAcceptsPoint(int index) {
+  return settingUsesDu(index);
+}
+
 // A mode's items, navigated exactly as a section's are: a first index and a count, which only
 // works because each mode's run is contiguous. Returns -1 and 0 for a mode with no settings of
 // its own, which the caller uses to decide there is no page worth opening.

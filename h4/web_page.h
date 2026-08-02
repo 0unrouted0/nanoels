@@ -154,12 +154,19 @@ function parseDu(t){
 // converted only here. A shop working in inches thinks in surface feet per minute.
 var FT_PER_M = 3.280839895;
 function fmtSpeed(v){ return String(metric ? v : Math.round(v * FT_PER_M)); }
-function parseSpeed(t){
-  var n = parseFloat(t);
-  if(isNaN(n)) return null;
-  return Math.round(metric ? n : n / FT_PER_M);
-}
+// The shown figure back to the stored m/min. Whole either way: the conversion out of feet is the
+// only rounding, and it is one the operator can see in the unit label.
+function speedToStored(n){ return Math.round(metric ? n : n / FT_PER_M); }
 function speedUnit(){ return metric ? "m/min" : "ft/min"; }
+
+// A plain count - passes, motor steps, an rpm limit - is stored whole. parseInt would take 4.5 as
+// 4 without a word, so the fraction is caught here and shown as an error instead. The panel's own
+// numpad refuses the decimal point on these same items.
+function parseCount(t){
+  if(/[.,]/.test(t)) return undefined;
+  var n = parseInt(t, 10);
+  return isNaN(n) ? null : n;
+}
 
 function post(key, value){
   var body = "key=" + encodeURIComponent(key) + "&value=" + encodeURIComponent(value);
@@ -285,7 +292,8 @@ function makeRow(item){
 
   var inp = document.createElement("input");
   inp.type = "text";
-  inp.inputMode = "decimal";
+  // A phone keyboard with no point on it is a clearer refusal than an error message after the fact.
+  inp.inputMode = item.kind === "du" ? "decimal" : "numeric";
   inp.value = shown(item, item.value);
   // Declared before paint() so the unit can be repainted with the value. Distances and speeds
   // have no fixed unit - it follows the metric/inch setting, which can be changed on the panel
@@ -297,10 +305,17 @@ function makeRow(item){
     u.textContent = unitText(item);
   };
   inp.oninput = function(){
+    // Only a distance takes a fraction, on this page as on the panel. A surface speed is stored in
+    // whole m/min, so a typed 30.5 would come back as 30 or 31 with nothing said about it.
     var v = item.kind === "du" ? parseDu(inp.value)
-          : item.kind === "speed" ? parseSpeed(inp.value)
-          : parseInt(inp.value, 10);
-    if(v === null || isNaN(v)){
+          : parseCount(inp.value);
+    if(v !== undefined && v !== null && !isNaN(v) && item.kind === "speed"){
+      v = speedToStored(v);
+    }
+    if(v === undefined){
+      showError(row, "whole numbers only");
+      item.pending = undefined;
+    } else if(v === null || isNaN(v)){
       showError(row, "not a number");
       item.pending = undefined;
     } else {

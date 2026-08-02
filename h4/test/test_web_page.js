@@ -59,7 +59,7 @@ global.XMLHttpRequest = class {
 
 const mod = { exports: {} };
 new Function('module', 'exports', block[1] +
-  '\nmodule.exports = {fmtSpeed,parseSpeed,unitText,speedUnit,fmtDu,parseDu,status,makeRow,render};'
+  '\nmodule.exports = {fmtSpeed,speedToStored,parseCount,unitText,speedUnit,fmtDu,parseDu,status,makeRow,render};'
 )(mod, mod.exports);
 const page = mod.exports;
 
@@ -88,8 +88,17 @@ eq('a list has no unit', page.unitText({ kind: 'list' }), '');
 
 group('surface speed conversion');
 eq('metric passes through', page.fmtSpeed(100), '100');
-eq('metric parses back', page.parseSpeed('100'), 100);
-ok('rubbish is rejected rather than becoming zero', page.parseSpeed('abc') === null);
+eq('metric parses back', page.speedToStored(100), 100);
+
+group('only a distance takes a fraction');
+// The panel refuses the decimal point on anything stored as a whole number. The page has to agree,
+// and parseInt would not: it takes 4.5 as 4 and says nothing, so the setting silently becomes a
+// different one from the one that was typed.
+eq('a count reads back whole', page.parseCount('12'), 12);
+ok('a fraction is refused rather than truncated', page.parseCount('4.5') === undefined);
+ok('so is one written with a comma', page.parseCount('4,5') === undefined);
+ok('rubbish is rejected rather than becoming zero', page.parseCount('abc') === null);
+eq('a distance still takes its fraction', page.parseDu('4.25'), 42500);
 
 group('rows, one per kind');
 // A row is [label, control, unit]. Which control it gets is the whole of what `kind` decides,
@@ -117,6 +126,11 @@ eq('and names its unit, which the table cannot', duRow.children[2].textContent, 
 const speedRow = rowFor({ kind: 'speed', label: 'Manual speed', key: 'css', value: 120 });
 eq('a speed in metric is itself', speedRow.children[1].value, '120');
 eq('and names its unit too', speedRow.children[2].textContent, 'm/min');
+
+// A phone keyboard with no point on it is a clearer refusal than an error after the fact.
+eq('a distance gets the decimal keyboard', duRow.children[1].inputMode, 'decimal');
+eq('a count gets the numeric one', numRow.children[1].inputMode, 'numeric');
+eq('and so does a speed', speedRow.children[1].inputMode, 'numeric');
 
 group('following a units change made on the panel');
 // The measurement system can be changed on the machine while this page is open. Every distance

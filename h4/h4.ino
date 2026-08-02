@@ -47,6 +47,9 @@ const int PCNT_LIM = 31000;
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
 const int32_t STARTS_MAX = 124; // No more than 124-start thread
 const long PASSES_MAX = MODE_PASSES_MAX; // No more turn or face passes than this
+// A taper of 100 is 100mm of X for every 1mm of Z, so nearly a facing cut. Anything past it is a
+// mistyped ratio rather than a cone.
+const float CONE_RATIO_MAX = 100;
 const long SAVE_DELAY_US = 5000000; // Wait 5s after last save and last change of saveable data before saving again
 const long DIRECTION_SETUP_DELAY_US = 5; // Stepper driver needs some time to adjust to direction change
 const long STEPPED_ENABLE_DELAY_MS = 100; // Delay after stepper is enabled and before issuing steps
@@ -1447,7 +1450,7 @@ void updateDisplay() {
       if (numpadResult != 0 && setupIndex == 1) {
         charIndex += printSetupStep();
         charIndex += lcd.print("Ratio ");
-        charIndex += lcd.print(numpadToConeRatio(), 5);
+        charIndex += printNoTrailing0(numpadToConeRatio());
         charIndex += lcd.print("?");
       } else if (!isOn && setupIndex == 1) {
         charIndex += printSetupStep();
@@ -3196,6 +3199,29 @@ bool numpadAcceptsInput() {
   return true;
 }
 
+// Whether a decimal point means anything in the number being typed. Not everything typed on the
+// numpad is a measurement: a pass count, a motor's steps per revolution and a surface speed are all
+// stored as whole numbers, and a point in one of them would be dropped somewhere between the screen
+// and storage. Better to refuse the key than to accept it and quietly ignore it.
+bool numpadAllowsPoint() {
+  if (!numpadAcceptsInput()) {
+    return false;
+  }
+  if (inSettings) {
+    // Which items take one is a property of the settings table, so it is decided there. The menu's
+    // own hint line already says "Type number" rather than naming the point key on the rest.
+    return settingAcceptsPoint(settingsIndex);
+  }
+  if (inCal) {
+    // Every figure a calibration routine asks for is a distance read off an indicator.
+    return true;
+  }
+  // The main screen does not know what a number will become until the key that consumes it is
+  // pressed: the same digits can end up a pitch, a stop, a move or a taper, and all of those take a
+  // point. The pass count is the one case the setup step identifies in advance.
+  return !(isPassMode() && setupIndex == 1);
+}
+
 void numpadPlusMinus(bool plus) {
   if (numpadDigits[numpadIndex - 1] < 9 && plus) {
     numpadDigits[numpadIndex - 1]++;
@@ -3210,16 +3236,28 @@ long numpadToDeciMicrons() {
   if (result == 0) {
     return 0;
   }
-  // Threads per inch are the one exception: a TPI figure is a count rather than a distance, so it
-  // stays whole and a decimal point in it would mean nothing.
+  // Threads per inch are not a distance but a count of threads, so the figure is inverted rather
+  // than scaled. It still takes a point: 11.5 and 27 are both real pipe threads.
   if (measure == MEASURE_TPI) {
-    return round(254000.0 / result);
+    double tpi = calNumpadValue(result, numpadFracDigits());
+    return tpi > 0 ? lround(254000.0 / tpi) : 0;
   }
   return numpadToDu();
 }
 
+// A rotational axis measures in degrees, and its screw pitch is already stated in degrees times
+// 10000 - the same scale a linear axis uses for millimetres. So the typed number converts exactly
+// as a metric distance does, and must not follow the measure into inches: there are no inches in a
+// circle. Typing 90 gives 90 degrees and 0.5 gives half of one.
+long numpadToRotationDu() {
+  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), false);
+}
+
+// A taper as the ratio it is written as - 0.0625 for NPT's 1 in 16 - typed literally now that there
+// is a point to type. It used to be entered with five implied decimals, so that same taper meant
+// keying 06250 and a bare 1 meant one hundred-thousandth rather than the 1:1 it reads as.
 float numpadToConeRatio() {
-  return getNumpadResult() / 100000.0;
+  return (float)calNumpadValue(getNumpadResult(), numpadFracDigits());
 }
 
 bool processNumpad(int keyCode) {
@@ -3253,11 +3291,6 @@ bool processNumpad(int keyCode) {
   } else if (keyCode == B_9) {
     numpadPress(9);
     inNumpad = true;
-  } else if (keyCode == B_BACKSPACE) {
-    // Short press is the decimal point; holding it clears the number. Handled on release in
-    // processKeypadEvent, so by the time it reaches here the decision has been made.
-    numpadPoint();
-    inNumpad = true;
   } else if (inNumpad && (keyCode == B_PLUS || keyCode == B_MINUS)) {
     numpadPlusMinus(keyCode == B_PLUS);
     return true;
@@ -3270,21 +3303,29 @@ bool processNumpad(int keyCode) {
 
 bool processNumpadResult(int keyCode) {
   long newDu = numpadToDeciMicrons();
+  long newRotationDu = numpadToRotationDu();
   float newConeRatio = numpadToConeRatio();
   long numpadResult = getNumpadResult();
+  // Every reading of the typed number has to happen before this: the decimal point lives in the
+  // numpad state and clearing it takes the point with it.
   resetNumpad();
   // Ignore numpad input unless confirmed with ON.
   if (keyCode == B_ON) {
     if (isPassMode() && setupIndex == 1) {
       setTurnPasses(int(min(PASSES_MAX, numpadResult)));
       setupIndex++;
-    } else if (mode == MODE_CONE && setupIndex == 1) {
-      setConeRatio(newConeRatio);
-      setupIndex++;
-    } else if (mode == MODE_TPR && setupIndex == 3) {
-      // Taper for the thread being cut, e.g. 0.0625 for NPT's 1:16.
-      setConeRatio(newConeRatio);
-      setupIndex++;
+    } else if ((mode == MODE_CONE && setupIndex == 1) || (mode == MODE_TPR && setupIndex == 3)) {
+      // The taper of the cone, or of the thread being cut - 0.0625 for NPT's 1 in 16.
+      //
+      // Refused rather than clamped above CONE_RATIO_MAX. A ratio that large is not a cone anyone
+      // turns, it is a mistyped one, and it would drive X that many times the length of every Z
+      // pass. Worth stopping while it is still a number on the screen.
+      if (newConeRatio > CONE_RATIO_MAX) {
+        splashError("Ratio too large");
+      } else {
+        setConeRatio(newConeRatio);
+        setupIndex++;
+      }
     } else {
       if (abs(newDu) <= DUPR_MAX) {
         setDupr(newDu);
@@ -3305,7 +3346,7 @@ bool processNumpadResult(int keyCode) {
   if (xDiameterDisplay && (keyCode == B_UP || keyCode == B_DOWN || keyCode == B_STOPU || keyCode == B_STOPD || keyCode == B_X)) {
     newDu /= 2;
   }
-  long pos = a->pos + (a->rotational ? numpadResult * 10 : newDu) / a->screwPitch * a->motorSteps * sign;
+  long pos = a->pos + (a->rotational ? newRotationDu : newDu) / a->screwPitch * a->motorSteps * sign;
 
   // Potentially assign a new value to a limit. Treat newDu as a relative distance from current position.
   if (keyCode == B_STOPL) {
@@ -5500,9 +5541,14 @@ void processKeypadEvent() {
       if (!numpadAcceptsInput()) {
         // Nothing to type into on this screen, so neither meaning applies.
       } else if (millis() - buttonBackspacePressMs >= BUTTON_HOLD_MS) {
+        // Clearing works wherever a number can be typed, whole or not.
         resetNumpad();
-      } else {
+      } else if (numpadAllowsPoint()) {
         numpadPoint();
+      } else {
+        // A whole number is being typed. Beeping says the key was seen and the point refused,
+        // which a dead key would not.
+        beep();
       }
     }
     return;

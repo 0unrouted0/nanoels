@@ -220,10 +220,13 @@ Entry used to be in whole microns, so 4mm meant typing `4000` — the smallest u
 
 **Hold backspace to clear the number** and start again. There is no single-digit delete any more — the key does the point instead. On a short number, clearing and retyping is quicker than backing up.
 
-The same applies everywhere a distance is typed: moves, soft limits, coordinates, the pitch, and the settings menu. Two kinds of number are not distances and are unaffected:
+The same applies everywhere a distance is typed: moves, soft limits, coordinates, the pitch, the calibration routines, and the settings menu. Three other figures take a point without being distances:
 
-- **Threads per inch** — a count, not a distance, so it is typed whole.
-- **Counts and rates** — passes, motor steps, speeds and the like are plain numbers.
+- **Threads per inch** — inverted rather than scaled, but `11.5` and `27` are both real pipe threads, so the point works there too.
+- **A taper ratio** — Cone's second step, and the tapered thread's fourth. Typed as it is written, so NPT's 1 in 16 is `.0625`. This used to be entered with five hidden decimal places, where that same taper meant keying `06250` and a bare `1` meant a hundred-thousandth rather than the 1:1 it looks like. Anything above 100 is now refused as a mistype.
+- **Degrees**, on a rotary axis — `90` is ninety degrees, `.5` is half of one. Inch mode doesn't apply; there are no inches in a circle.
+
+**Where a decimal makes no sense the key won't type one, and beeps instead.** A pass count, a motor's steps per revolution and a surface speed are all whole numbers where they're stored, so a point in one would be dropped somewhere between the screen and the write. The firmware refuses it while it's still on the display rather than losing it quietly afterwards. Holding to clear still works on those screens.
 
 ### Settings menu
 

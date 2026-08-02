@@ -1331,6 +1331,48 @@ static void testNumpadEntry() {
   }
   expectB("no common entry costs more than one extra keystroke", neverMuchWorse, true);
   expectL("and a round move costs one", cases[0].keysNow, 1);
+
+  // Two figures take a point without being distances, so they go through calNumpadValue instead.
+  group("numbers that take a point but are not distances");
+  expectF("a taper is the ratio as written", calNumpadValue(625, 4), 0.0625, 1e-9);
+  expectF("1:1 is a bare 1", calNumpadValue(1, 0), 1.0, 1e-9);
+  expectF("a whole number keeps its value", calNumpadValue(42, 0), 42.0, 1e-9);
+  expectF("nothing typed is zero", calNumpadValue(0, 0), 0.0, 1e-9);
+  // 11.5 and 27 threads per inch are both real pipe threads, so TPI cannot be whole-only.
+  expectL("11.5 tpi is a 2.2087mm pitch",
+      (long)(254000.0 / calNumpadValue(115, 1) + 0.5), 22087);
+  expectL("a whole 20 tpi is unchanged by the point machinery",
+      (long)(254000.0 / calNumpadValue(20, 0) + 0.5), 12700);
+
+  // A rotational axis states its screw pitch in degrees times 10000, the same scale a linear one
+  // uses for millimetres, so degrees convert exactly as a metric distance does - and must not
+  // follow the measure into inches, there being no inches in a circle.
+  group("typing an angle");
+  expectL("90 degrees", calNumpadToDu(90, 0, false), 90 * 10000L);
+  expectL("half a degree", calNumpadToDu(5, 1, false), 5000);
+  expectL("a full turn", calNumpadToDu(360, 0, false), 3600000L);
+  // The angle in the same units the axis stores its travel in, so it divides by the screw pitch
+  // without a second scale factor. SCREW_A1_DU of 20000 is two degrees per turn of the worm.
+  expectL("a degree is 10000 of whatever a rotational axis counts",
+      calNumpadToDu(1, 0, false), 10000L);
+
+  // Where a point cannot be typed at all. The rule lives with the settings table so both the menu
+  // and this test read the same one, rather than the menu deciding and the test restating.
+  group("items that refuse a decimal point");
+  bool onlyDistances = true;
+  int pointable = 0;
+  for (int i = 0; i < SETTINGS_COUNT; i++) {
+    bool point = settingAcceptsPoint(i);
+    if (point) pointable++;
+    // A whole-number item accepting a point would store the number a power of ten too large.
+    if (point != settingUsesDu(i)) onlyDistances = false;
+    if (point && (settingIsToggle(i) || settingIsList(i) || settingIsAction(i) ||
+                  settingUsesSpeed(i))) {
+      onlyDistances = false;
+    }
+  }
+  expectB("nothing but a distance accepts a point", onlyDistances, true);
+  expectB("and some items do, so the rule is not simply off", pointable > 0, true);
 }
 
 static void testModePredicates() {
