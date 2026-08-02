@@ -89,6 +89,10 @@ CHANGES2 = [
         ("Settings per job",
          "How many passes, how much clearance and so on are remembered separately for each kind of "
          "job, so setting up a thread does not disturb your turning settings."),
+        ("Numbers typed as you would write them",
+         "4mm is one keystroke, not four. The stock firmware takes every distance in whole microns, "
+         "so the smallest useful figure sets the length of every figure; here the backspace key is "
+         "a decimal point, and it refuses one where a fraction cannot be stored."),
         ("Sounds that mean something",
          "A refused key, a finished pass and a lost thread each sound different, so you can keep "
          "your eyes on the work."),

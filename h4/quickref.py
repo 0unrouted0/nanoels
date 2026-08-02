@@ -160,11 +160,10 @@ def page1():
         [P("It moves itself", S_CELL_B),
          P("Keep clear, know where the stop key is, and try anything new with the tool well away "
            "from the work.", S_CELL)],
-        [P("Typing a distance", S_CELL_B),
-         P("In millimetres, or inches in inch mode. <b>The backspace key is the decimal point</b> — "
-           "type <b>4</b> for 4mm, <b>.5</b> for half a millimetre, <b>25.4</b> for an inch. Hold "
-           "that key to clear the number and start again. Where a decimal would mean nothing — a "
-           "pass count, a motor's steps per turn — the key beeps instead of typing one.", S_CELL)],
+        [P("Typing numbers", S_CELL_B),
+         P("In millimetres, or inches in inch mode, and <b>the backspace key is the decimal "
+           "point</b> — type <b>4</b> for 4mm and <b>.5</b> for half a millimetre. Which unit each "
+           "job wants is on page 3.", S_CELL)],
     ]
     story.append(numbered(intro, numw=20 * mm))
     story.append(Spacer(1, 7))
@@ -451,8 +450,58 @@ def thread_columns():
     return out
 
 
+# What each job asks you to type, and in what. Nobody wants to discover mid-setup that the number
+# the screen is waiting for is a count rather than a distance.
+UNITS = [
+    ("A distance or a position", "millimetres, or inches in inch mode",
+     "4 &#183; .5 &#183; 4.25", "moves, the four limits, backlash, clearance"),
+    ("A feed", "millimetres per turn of the spindle",
+     "0.1", "gearbox, cross-feed, turning, facing, parting, taper"),
+    ("A thread pitch", "millimetres per turn, or threads per inch in tpi mode",
+     "1.5 &#183; 11.5", "threading, tapered threading"),
+    ("Thread depth", "millimetres inwards from the surface &#8212; set as the <b>up</b> limit",
+     "0.92", "threading; twice that in diameter readout"),
+    ("A taper", "a ratio, no unit &#8212; change in diameter per unit of length",
+     ".0625", "taper, tapered threading"),
+    ("An angle", "degrees",
+     "90 &#183; .5", "moves and limits on the fourth axis, if fitted"),
+    ("A steady feed", "millimetres per <b>second</b>, the spindle out of it",
+     "2", "steady feed only"),
+    ("A count of something", "a whole number &#8212; the point key beeps rather than typing",
+     "8", "passes, spring passes, thread starts, spindle divisions"),
+    ("A surface speed", "metres per minute, or feet per minute in inch mode &#8212; whole",
+     "90", "the cutting speed helper, in the settings"),
+]
+
+
 def page3():
-    story = [Paragraph("Every thread it knows", S_H2)]
+    story = [Paragraph("Typing numbers into it", S_H2)]
+    story.append(P("Digits fill in from the left, so <b>4</b> then <b>2</b> is 42. "
+                   "<b>The backspace key is the decimal point</b>, and it works as a leading point "
+                   "— <b>.5</b> is half a millimetre with no need for the zero. <b>Hold</b> that "
+                   "key to clear the number and start over; there is no single-digit delete.",
+                   S_BODY))
+    story.append(Spacer(1, 3))
+    story.append(P("Nothing is acted on until you press the key that uses it, and the bottom line "
+                   "shows what your number comes to first — <b>Use 4.25mm?</b> — so a misplaced "
+                   "point is something you can see rather than something you find in the work. "
+                   "Where a fraction cannot mean anything, such as a count of passes, the point key "
+                   "beeps instead of typing one.", S_DIM))
+    story.append(Spacer(1, 5))
+
+    data = [[P("What you are typing", S_KEY), P("In what", S_KEY), P("Looks like", S_KEY),
+             P("Where it is asked", S_KEY)]]
+    for what, unit, example, where in UNITS:
+        data.append([P(what, S_CELL_B), P(unit, S_CELL), P(example, S_CELL), P(where, S_CELL)])
+    story.append(zebra(data, [34 * mm, None, 22 * mm, 52 * mm]))
+    story.append(Spacer(1, 3))
+    story.append(P("The <b>measure</b> key swaps the whole machine between millimetres, inches and "
+                   "threads per inch at any time — it changes how figures are shown and typed, "
+                   "never what the machine has stored, so nothing moves and nothing is lost. Set it "
+                   "to match the drawing in front of you.", S_DIM))
+    story.append(Spacer(1, 8))
+
+    story.append(Paragraph("Every thread it knows", S_H2))
     story.append(P("Choose one from the machine and the feed is set for you. <b>Depth</b> is how far "
                    "in from the surface the tool has to go, in millimetres, measured on the radius "
                    "— that is what the up limit is for, and it is the one thing the controller "
@@ -605,6 +654,6 @@ if __name__ == "__main__":
           [page1(), page2(), page3(), page4()],
           ["What it does, and how to ask for it",
            "Setting up your lathe",
-           "Threads it knows, and how to cut one",
+           "Typing numbers, and every thread it knows",
            "Speeds, tapers and the web page"],
           "Settings key: short press = this job's settings   ·   hold it for the main menu")

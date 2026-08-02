@@ -228,6 +228,26 @@ The same applies everywhere a distance is typed: moves, soft limits, coordinates
 
 **Where a decimal makes no sense the key won't type one, and beeps instead.** A pass count, a motor's steps per revolution and a surface speed are all whole numbers where they're stored, so a point in one would be dropped somewhere between the screen and the write. The firmware refuses it while it's still on the display rather than losing it quietly afterwards. Holding to clear still works on those screens.
 
+Nothing is acted on until you press the key that uses the number, and the bottom line shows what it comes to first — `Use 4.25mm?` — so a misplaced point is something you can see rather than something you find in the work.
+
+#### What each job asks for
+
+| What you are typing | In what | Looks like | Where it is asked |
+|---|---|---|---|
+| A distance or a position | millimetres, or inches in inch mode | `4` `.5` `4.25` | moves, the four limits, backlash, clearance |
+| A feed | millimetres per turn of the spindle | `0.1` | gearbox, cross-feed, turning, facing, parting, cone |
+| A thread pitch | millimetres per turn, or threads per inch in TPI mode | `1.5` `11.5` | threading, tapered threading |
+| Thread depth | millimetres inwards from the surface, set as the **up** limit | `0.92` | threading; twice that in diameter readout |
+| A taper | a ratio, no unit — change in diameter per unit of length | `.0625` | cone, tapered threading |
+| An angle | degrees | `90` `.5` | moves and limits on the A1 rotary axis |
+| A steady feed | millimetres per **second**, the spindle out of it | `2` | async mode only |
+| A count of something | a whole number — the point key beeps rather than typing | `8` | passes, spring passes, thread starts, spindle divisions |
+| A surface speed | m/min, or ft/min in inch mode — whole | `90` | the cutting speed helper, in the settings |
+
+Slotting takes no feed at all: it runs on the four limits and a pass count, at the manual move speed.
+
+The measure key swaps the whole machine between millimetres, inches and threads per inch at any time. It changes how figures are shown and typed, never what is stored, so nothing moves and nothing is lost.
+
 ### Settings menu
 
 The settings button is the **hexagon with a dot in the middle** - a hex nut seen end-on - on the right-hand side of the panel, in the inner of the two right columns, between the display button above it and the measure button below it. It's the one button in this manual named in words rather than shown as a symbol, so it's worth pointing out.
