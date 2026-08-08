@@ -256,16 +256,33 @@ inline long calMaxFeedDuPerMin(long speedStepsPerSec, float screwPitch, float mo
   return calRoundL((double)speedStepsPerSec * 60.0 * screwPitch / motorSteps);
 }
 
-// Highest spindle speed the axis can still keep up with at this pitch, in rpm. Above it the axis
-// is asked to move faster than its maximum step rate and the thread loses sync. duPerRev is the
-// pitch in deci-microns per spindle revolution; its sign is irrelevant, so left-hand threads give
-// the same answer.
-inline long calMaxRpmForPitch(long speedStepsPerSec, float screwPitch, float motorSteps, long duPerRev) {
+// Highest spindle speed the axis can still keep up with at this pitch, in rpm. Above it the axis is
+// asked to move faster than its maximum step rate and the thread loses sync - quietly, because
+// nothing stops or complains; the axis simply stops keeping up and the thread walks out of pitch.
+//
+// duPerRev is the pitch in deci-microns per spindle revolution; its sign is irrelevant, so
+// left-hand threads give the same answer. starts multiplies it: a multi-start thread advances one
+// pitch per start per spindle revolution, so a two-start thread halves the ceiling.
+//
+// motorSteps is steps per revolution of the SCREW, so any motor-to-screw belt or gear reduction is
+// already inside it - see calStepsPerScrewRev(). Passing motorStepsPerTurn here instead would drop
+// the reduction and overstate the ceiling by exactly that ratio.
+//
+// speedStepsPerSec is the axis's maximum step rate. That is the machine's number rather than a
+// theoretical one: it comes from the "Max speed" setting, which the max-speed calibration routine
+// measures by ramping the axis until it stalls and backing off. Whatever is stored there is what
+// this figure means, so a conservative stored value gives a conservative ceiling.
+inline long calMaxRpmForPitch(long speedStepsPerSec, float screwPitch, float motorSteps,
+                              long duPerRev, long starts) {
   long pitch = calAbsL(duPerRev);
-  if (pitch == 0 || motorSteps < 1) {
+  if (starts < 1) {
+    starts = 1;
+  }
+  if (pitch == 0 || motorSteps < 1 || speedStepsPerSec < 1) {
     return 0;
   }
-  return calRoundL((double)speedStepsPerSec * 60.0 * screwPitch / ((double)motorSteps * pitch));
+  return calRoundL((double)speedStepsPerSec * 60.0 * screwPitch /
+      ((double)motorSteps * pitch * starts));
 }
 
 // Highest rpm the ENCODER ITSELF may turn at before the glitch filter starts discarding real

@@ -146,6 +146,40 @@ static void testTravelAndSpeed() {
   expectL("clamps when already at start speed", calSpeedBackoff(100, 100), 100);
 }
 
+static void testMaxRpmForPitch() {
+  group("pitch the axis can keep up with");
+  // This lathe's Z: 2mm screw, 800 steps per screw revolution, 4800 steps/sec.
+  // At 1.75mm pitch that is 1.75 * 800 / 2 = 700 steps per spindle revolution,
+  // so 4800 * 60 / 700 = 411 rpm.
+  expectL("M12x1.75 on Z", calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 17500, 1), 411);
+  // Halve the pitch and the axis keeps up to twice the speed.
+  expectL("0.875mm pitch doubles the ceiling", calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 8750, 1), 823);
+  // A fine feed is limited by nothing the spindle can reach.
+  expectB("0.1mm feed clears 2000rpm",
+      calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 1000, 1) > 2000, true);
+  // Multi-start advances one pitch per start per revolution, so the ceiling divides.
+  expectL("two starts halves the ceiling", calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 17500, 2), 206);
+  expectL("starts below 1 is treated as 1", calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 17500, 0), 411);
+  // X is geared finer - 2400 steps per 1.25mm - so the same pitch costs it far more steps:
+  // 17500 * 2400 / 12500 = 3360 per revolution against Z's 700.
+  expectL("same pitch on X", calMaxRpmForPitch(7200, 12500.0f, 2400.0f, 17500, 1), 129);
+
+  // A motor-to-screw reduction is inside motorSteps, so it lowers the ceiling by exactly its ratio.
+  // 800 motor steps through a 3:1 reduction is 2400 per screw revolution, and the motor's own top
+  // step rate has not changed - so the same pitch is reachable at a third of the spindle speed.
+  float geared = calStepsPerScrewRev(800.0f, 1, 3);
+  expectL("3:1 reduction is folded into motorSteps", (long)geared, 2400);
+  expectL("and thirds the ceiling", calMaxRpmForPitch(4800, Z_PITCH, geared, 17500, 1), 137);
+
+  // Degenerate inputs report no limit rather than dividing by zero.
+  expectL("zero pitch has no limit", calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, 0, 1), 0);
+  expectL("zero step rate has no limit", calMaxRpmForPitch(0, Z_PITCH, Z_STEPS, 17500, 1), 0);
+  expectL("no motor steps has no limit", calMaxRpmForPitch(4800, Z_PITCH, 0.0f, 17500, 1), 0);
+  // Sign of the pitch is direction, not magnitude - a left-hand thread is no faster to cut.
+  expectL("left-hand thread is the same ceiling",
+      calMaxRpmForPitch(4800, Z_PITCH, Z_STEPS, -17500, 1), 411);
+}
+
 static void testEncoderPpr() {
   group("encoder PPR");
   // 4x quadrature: both edges of both channels, so 600 PPR is 2400 counts per revolution.
@@ -322,13 +356,10 @@ static void testDerivedFigures() {
   expectL("no motor, no feed", calMaxFeedDuPerMin(2000, Z_PITCH, 0), 0);
 
   // The number that matters when threading: 300mm/min of Z at a 1mm pitch is 300 rpm, and a
-  // coarser pitch lowers the ceiling proportionally.
-  expectL("max rpm at 1mm pitch", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 10000), 300);
-  expectL("a 3mm pitch thirds it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 30000), 100);
-  expectL("a fine 0.5mm pitch doubles it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 5000), 600);
-  // Left-hand threads are the same speed problem as right-hand ones.
-  expectL("sign of the pitch is irrelevant", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, -30000), 100);
-  expectL("no pitch means no limit to report", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 0), 0);
+  // coarser pitch lowers the ceiling proportionally. Fuller coverage in testMaxRpmForPitch().
+  expectL("max rpm at 1mm pitch", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 10000, 1), 300);
+  expectL("a 3mm pitch thirds it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 30000, 1), 100);
+  expectL("a fine 0.5mm pitch doubles it", calMaxRpmForPitch(2000, Z_PITCH, Z_STEPS, 5000, 1), 600);
 
   // The worked example from the ENCODER_FILTER comment in machine_config.h.
   expectL("1000 PPR at filter 200", calMaxEncoderRpm(1000, 200), 12000);
@@ -1441,6 +1472,49 @@ static void testModePredicates() {
   expectB("as does thread, which hides TPR", modeHasSiblingOf(MODE_THREAD), true);
   expectB("XGEAR does not - it is the sibling", modeHasSiblingOf(MODE_XGEAR), false);
 
+  group("keys that carry several screens");
+  expectL("the two gearboxes share a key", modeGroupOf(MODE_XGEAR), modeGroupOf(MODE_NORMAL));
+  expectL("so do straight and tapered threads", modeGroupOf(MODE_TPR), modeGroupOf(MODE_THREAD));
+  expectL("turning has a key to itself", modeGroupOf(MODE_TURN), (long)MODE_GROUP_NONE);
+  expectL("so does facing", modeGroupOf(MODE_FACE), (long)MODE_GROUP_NONE);
+  expectL("so does parting", modeGroupOf(MODE_CUT), (long)MODE_GROUP_NONE);
+  expectL("and cone", modeGroupOf(MODE_CONE), (long)MODE_GROUP_NONE);
+  expectB("the keyless modes share the mode key", modeIsOther(MODE_GCODE), true);
+  expectB("the gearbox is not one of them", modeIsOther(MODE_NORMAL), false);
+  expectB("nor is turning", modeIsOther(MODE_TURN), false);
+
+  // Each ring comes back to where it started, so no screen is unreachable and none is a dead end.
+  expectL("gear rings round in two", modeNextInGroup(modeNextInGroup(MODE_NORMAL, true), true), (long)MODE_NORMAL);
+  expectL("and lands on the cross-feed on the way", modeNextInGroup(MODE_NORMAL, true), (long)MODE_XGEAR);
+  expectL("thread rings round in two", modeNextInGroup(modeNextInGroup(MODE_THREAD, true), true), (long)MODE_THREAD);
+  expectL("and lands on the tapered one", modeNextInGroup(MODE_THREAD, true), (long)MODE_TPR);
+  int m = MODE_A1;
+  for (int i = 0; i < 5; i++) m = modeNextInGroup(m, true);
+  expectL("the mode key rings round in five with A1 fitted", m, (long)MODE_A1);
+  m = MODE_ELLIPSE;
+  for (int i = 0; i < 4; i++) m = modeNextInGroup(m, false);
+  expectL("and in four without it", m, (long)MODE_ELLIPSE);
+  expectB("A1 is skipped when the axis is not fitted", modeNextInGroup(MODE_SLOT, false) != MODE_A1, true);
+  // Every step of every ring stays inside its own group, or a key would change what the next press
+  // of a different key does.
+  bool ringsStayHome = true;
+  const int ringStarts[] = {MODE_NORMAL, MODE_THREAD, MODE_A1};
+  for (int r = 0; r < 3; r++) {
+    int at = ringStarts[r];
+    for (int i = 0; i < 6; i++) {
+      at = modeNextInGroup(at, true);
+      if (modeGroupOf(at) != modeGroupOf(ringStarts[r])) ringsStayHome = false;
+    }
+  }
+  expectB("no ring leaves its own key", ringsStayHome, true);
+  // A single-screen mode has nowhere to go, so a key press cannot move it sideways.
+  expectL("turning stays put", modeNextInGroup(MODE_TURN, true), (long)MODE_TURN);
+  // The first press of each key, before anything has been remembered.
+  expectL("gear opens on the Z gearbox", modeGroupDefault(MODE_GROUP_GEARBOX, true), (long)MODE_NORMAL);
+  expectL("thread opens on the straight one", modeGroupDefault(MODE_GROUP_THREAD, true), (long)MODE_THREAD);
+  expectL("the mode key opens on A1 when fitted", modeGroupDefault(MODE_GROUP_OTHER, true), (long)MODE_A1);
+  expectL("and on the ellipse when not", modeGroupDefault(MODE_GROUP_OTHER, false), (long)MODE_ELLIPSE);
+
   group("which corner an operation starts from");
   // leftStop is the larger coordinate on both axes - the convention throughout the firmware.
   const long L = 100, R = 0, POS = 55;
@@ -1803,6 +1877,7 @@ int main() {
   testGeometry();
   testPitchCalibration();
   testTravelAndSpeed();
+  testMaxRpmForPitch();
   testEncoderPpr();
   testSpindleModulo();
   testRpmAccumulator();

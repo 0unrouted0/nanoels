@@ -62,6 +62,66 @@ inline bool modeHasSiblingOf(int m) {
   return m == MODE_NORMAL || m == MODE_THREAD;
 }
 
+// ---------------------------------------------------------------------------
+// Buttons that open more than one screen
+// ---------------------------------------------------------------------------
+//
+// Three keys carry several modes each: gear covers the two gearboxes, thread covers straight and
+// tapered, and the mode key covers everything without a key of its own. Pressing one of those used
+// to step to the next mode in its list from wherever you were, which meant leaving a screen and
+// coming back put you on a different one - press gear from turning and you landed on the Z gearbox
+// even though you had been using the cross-feed one, and the only way back was to press it again
+// and watch the machine change what it drives in between.
+//
+// So the first press returns to whichever of that button's screens you were last on, and only a
+// second press moves along its list. Getting back to where you were costs one press and changes
+// nothing about how the machine behaves on the way.
+
+#define MODE_GROUP_NONE 0
+#define MODE_GROUP_GEARBOX 1
+#define MODE_GROUP_THREAD 2
+#define MODE_GROUP_OTHER 3
+#define MODE_GROUP_COUNT 4
+
+// The modes reached by the mode key - the ones with no dedicated key of their own.
+inline bool modeIsOther(int m) {
+  return m == MODE_A1 || m == MODE_ELLIPSE || m == MODE_GCODE || m == MODE_ASYNC || m == MODE_SLOT;
+}
+
+inline int modeGroupOf(int m) {
+  if (modeIsGearbox(m)) return MODE_GROUP_GEARBOX;
+  if (modeIsThread(m)) return MODE_GROUP_THREAD;
+  if (modeIsOther(m)) return MODE_GROUP_OTHER;
+  return MODE_GROUP_NONE;
+}
+
+// The next screen on the same button, wrapping round. hasA1 says whether the third axis is fitted:
+// its screen is only reachable on a machine that has one, so it drops out of the ring otherwise.
+inline int modeNextInGroup(int m, bool hasA1) {
+  switch (m) {
+    case MODE_NORMAL: return MODE_XGEAR;
+    case MODE_XGEAR: return MODE_NORMAL;
+    case MODE_THREAD: return MODE_TPR;
+    case MODE_TPR: return MODE_THREAD;
+    case MODE_A1: return MODE_ELLIPSE;
+    case MODE_ELLIPSE: return MODE_GCODE;
+    case MODE_GCODE: return MODE_ASYNC;
+    case MODE_ASYNC: return MODE_SLOT;
+    case MODE_SLOT: return hasA1 ? MODE_A1 : MODE_ELLIPSE;
+    default: return m; // single-screen buttons have nowhere else to go
+  }
+}
+
+// Where a button lands the first time it is pressed, before it has anything to remember.
+inline int modeGroupDefault(int group, bool hasA1) {
+  switch (group) {
+    case MODE_GROUP_GEARBOX: return MODE_NORMAL;
+    case MODE_GROUP_THREAD: return MODE_THREAD;
+    case MODE_GROUP_OTHER: return hasA1 ? MODE_A1 : MODE_ELLIPSE;
+    default: return MODE_NORMAL;
+  }
+}
+
 // Shown on the panel and in the web status, so the two never disagree about what the machine is
 // doing. MODE_NORMAL is the plain gearbox and shows nothing, which is why this can return "".
 inline const char* modeNameOf(int m) {

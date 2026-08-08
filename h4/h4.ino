@@ -67,7 +67,7 @@ const bool SPINDLE_PAUSES_GCODE = true; // pause GCode execution when spindle st
 const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 
 // To be incremented whenever a measurable improvement is made.
-#define SOFTWARE_VERSION 17
+#define SOFTWARE_VERSION 18
 
 
 
@@ -154,6 +154,10 @@ const long RPM_UPDATE_INTERVAL_MICROS = 1000000; // Don't redraw RPM more often 
 // leaves a half-rewritten line on screen much of the time - both of which read as smearing.
 // Raise this if fast-moving digits are still hard to read, lower it if the screen feels laggy.
 const int LCD_MIN_UPDATE_MS = 50; // 20 redraws per second
+// How often the whole screen is rewritten in place regardless of whether anything changed, so a
+// character lost on the way to the controller repairs itself instead of staying missing. Long
+// enough to be nearly free, short enough that you would not finish reading a wrong line first.
+const unsigned long LCD_FULL_REFRESH_MS = 3000;
 
 const long GCODE_FEED_DEFAULT_DU_SEC = 20000; // Default feed in du/sec in GCode mode
 const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode - F1
@@ -177,6 +181,11 @@ long lcdHashLine0 = LCD_HASH_INITIAL;
 long lcdHashLine1 = LCD_HASH_INITIAL;
 long lcdHashLine2 = LCD_HASH_INITIAL;
 long lcdHashLine3 = LCD_HASH_INITIAL;
+// Whether the glass needs wiping before the next draw. Kept apart from the line hashes because
+// those get invalidated on a timer to rewrite the screen in place - see LCD_FULL_REFRESH_MS - and
+// that must not drag a clear() along with it, which would flicker several times a minute.
+bool lcdNeedsClear = true;
+unsigned long lcdRefreshedMs = 0;
 bool splashScreen = false;
 
 #include <Preferences.h>
@@ -301,6 +310,9 @@ struct Axis {
   bool directionInitialized;
   unsigned long stepStartUs;
   int stepperEnableCounter;
+  // Set when a move was issued with no task sitting on it, so moveAxis() knows it owns handing the
+  // driver's enable line back once the move lands. See stepToFinalEnabled().
+  bool autoRelease;
   bool disabled;
   bool savedDisabled;
 
@@ -371,6 +383,7 @@ void initAxis(Axis* a, char name, bool active, bool rotational, float motorSteps
   a->directionInitialized = false;
   a->stepStartUs = 0;
   a->stepperEnableCounter = 0;
+  a->autoRelease = false;
   a->disabled = false;
   a->savedDisabled = false;
 
@@ -449,6 +462,10 @@ long moveStep = 0; // thousandth of a mm
 long savedMoveStep = 0; // moveStep saved in Preferences
 
 volatile int mode = -1; // mode of operation (ELS, multi-start ELS, asynchronous)
+// Which screen each multi-screen key was last showing, indexed by MODE_GROUP_*. Lets a key bring
+// you back to where you were instead of to the front of its list - see modes.h. Not stored in
+// Preferences: the selected mode itself is, and setup() seeds this from whatever that restores.
+int lastModeInGroup[MODE_GROUP_COUNT];
 int nextMode = 0; // mode value that should be applied asap
 bool nextModeFlag = false; // whether nextMode needs attention
 int savedMode = -1; // mode saved in Preferences
@@ -735,6 +752,12 @@ String gcodeCommand = "";
 long gcodeFeedDuPerSec = GCODE_FEED_DEFAULT_DU_SEC;
 bool gcodeInitialized = false;
 bool gcodeAbsolutePositioning = true;
+// Units the running program is written in, set by G20/G21 and reset to metric at the start of every
+// program. Deliberately NOT the panel's "measure": a program that opens with G20 used to switch the
+// whole machine to inches and leave it there, and a program with no G20/G21 at all was interpreted
+// in whatever units the operator last pressed - so the same file cut a different part depending on
+// the state of a display toggle.
+bool gcodeInch = false;
 bool gcodeInBrace = false;
 bool gcodeInSemicolon = false;
 bool serialInKeycode = false;
@@ -1126,9 +1149,17 @@ void ensureLcdCharset(bool big) {
   lcdBigCharsLoaded = big;
   if (big) lcdLoadBigChars();
   else lcdLoadNormalChars();
+  // createChar() leaves the controller's address counter pointing into CGRAM. Every draw block
+  // below starts with setCursor() so nothing depends on it today, but a block that ever forgets
+  // would write its text into a glyph bitmap rather than onto the screen, which is a hard fault to
+  // read back from the symptom. One command puts it somewhere sane.
+  lcd.setCursor(0, 0);
   // The glyphs on screen just changed meaning, force a full redraw.
+  lcdNeedsClear = true;
   lcdHashLine0 = LCD_HASH_INITIAL;
   bigDroHash = LCD_HASH_INITIAL;
+  settingsLcdHash = LCD_HASH_INITIAL;
+  calLcdHash = LCD_HASH_INITIAL;
 }
 
 // Renders an axis value in 2-row-tall digits on rows row and row + 1, right-aligned into the
@@ -1235,6 +1266,7 @@ void showStartupScreen() {
   printNoTrailing0(x.screwPitch / 10000.0);
   lcd.write(customCharMmCode);
   lcd.print(" " + String(long(round(x.motorSteps))) + "step");
+  lcdNeedsClear = true; // this screen's text has to come off the glass, not just be drawn over
   lcdHashLine0 = LCD_HASH_INITIAL;
   lcdHashLine1 = LCD_HASH_INITIAL;
   lcdHashLine2 = LCD_HASH_INITIAL;
@@ -1247,6 +1279,26 @@ void updateDisplay() {
   if (otaInProgress) {
     updateOtaDisplay();
     return;
+  }
+  // Rewrite the whole screen every few seconds even when nothing has changed.
+  //
+  // The per-line hashes mean a line is written once and then never touched again until its content
+  // changes - which is what keeps the display readable, but it also means a single byte lost on the
+  // way to the controller stays lost. A character that goes missing sits there for as long as that
+  // line's content holds still, which on the pitch line can be the whole job. Rewriting in place
+  // costs one pass over four lines every few seconds and puts any such gap right.
+  //
+  // Deliberately not a clear(): the lines are redrawn with identical content, so nothing blinks.
+  unsigned long refreshNowMs = millis();
+  if (refreshNowMs - lcdRefreshedMs >= LCD_FULL_REFRESH_MS) {
+    lcdRefreshedMs = refreshNowMs;
+    lcdHashLine0 = LCD_HASH_INITIAL;
+    lcdHashLine1 = LCD_HASH_INITIAL;
+    lcdHashLine2 = LCD_HASH_INITIAL;
+    lcdHashLine3 = LCD_HASH_INITIAL;
+    bigDroHash = LCD_HASH_INITIAL;
+    settingsLcdHash = LCD_HASH_INITIAL;
+    calLcdHash = LCD_HASH_INITIAL;
   }
   if (splashScreen) {
     splashScreen = false;
@@ -1271,9 +1323,10 @@ void updateDisplay() {
   ensureLcdCharset(false);
   int rpm = showTacho ? getApproxRpm() : 0;
   int charIndex = 0;
-  if (lcdHashLine0 == LCD_HASH_INITIAL) {
-    // First run after reset.
+  if (lcdNeedsClear) {
+    lcdNeedsClear = false;
     lcd.clear();
+    lcdHashLine0 = LCD_HASH_INITIAL;
     lcdHashLine1 = LCD_HASH_INITIAL;
     lcdHashLine2 = LCD_HASH_INITIAL;
     lcdHashLine3 = LCD_HASH_INITIAL;
@@ -1745,6 +1798,14 @@ void taskMoveZ(void *param) {
     }
     if (isOn && !manualMovesAllowedWhenOn()) {
       setIsOnFromTask(false);
+      // Wait for the motion loop to actually apply it before reading any axis position below.
+      // setIsOnFromLoop() calls markOrigin(), which rebases pos and motorPos together on core 1.
+      // Reading z.pos while that is in flight pairs a position from the old origin with a motorPos
+      // from the new one, and stepTo() commands the difference - a full-speed move of however far
+      // the carriage happened to be from its origin.
+      while (nextIsOnFlag && emergencyStop == ESTOP_NONE) {
+        taskYIELD();
+      }
     }
     int sign = pulseDelta == 0 ? (left ? 1 : -1) : (pulseDelta > 0 ? 1 : -1);
     bool stepperOn = true;
@@ -1844,6 +1905,10 @@ void taskMoveX(void *param) {
     }
     if (isOn && !manualMovesAllowedWhenOn()) {
       setIsOnFromTask(false);
+      // See taskMoveZ: x.pos below must not be read while markOrigin() is rebasing it on core 1.
+      while (nextIsOnFlag && emergencyStop == ESTOP_NONE) {
+        taskYIELD();
+      }
     }
     x.movingManually = true;
     x.speedMax = getStepMaxSpeed(&x);
@@ -1939,6 +2004,7 @@ void taskGcode(void *param) {
       gcodeInitialized = true;
       gcodeCommand = "";
       gcodeAbsolutePositioning = true;
+      gcodeInch = false; // G21 is the default in every dialect worth following
       gcodeFeedDuPerSec = GCODE_FEED_DEFAULT_DU_SEC;
       gcodeInBrace = false;
       gcodeInSemicolon = false;
@@ -2452,6 +2518,11 @@ void setup() {
   savedShowTacho = showTacho = pref.getBool(PREF_SHOW_TACHO);
   savedShowBigDro = showBigDro = pref.getBool(PREF_SHOW_BDRO);
   savedMoveStep = moveStep = pref.getLong(PREF_MOVE_STEP, MOVE_STEP_1);
+  // Seed each multi-screen key before the stored mode is applied: setModeFromLoop() overwrites the
+  // entry for whichever group that mode belongs to, and the other keys start on their first screen.
+  for (int g = 0; g < MODE_GROUP_COUNT; g++) {
+    lastModeInGroup[g] = modeGroupDefault(g, ACTIVE_A1);
+  }
   setModeFromLoop(savedMode = pref.getInt(PREF_MODE));
   // setModeFromLoop returns early when the stored mode is the one already selected, so the live
   // set would still hold defaults. Load it explicitly for whatever mode we ended up in.
@@ -2651,6 +2722,22 @@ void updateAsyncTimerSettings() {
 }
 
 void setDupr(long value) {
+  // Warn if the axis cannot follow this pitch all the way to the lathe's top speed.
+  //
+  // Accepted rather than refused: a coarse pitch is perfectly usable at low rpm, and refusing it
+  // would block a legitimate setup. But it is worth saying while it is still a number on the
+  // screen, because the failure it leads to is silent. Past the reported rpm the axis does not
+  // stop or complain - it just stops keeping up, and the thread walks out of pitch and gets
+  // shallower as the pass goes on. Nothing on the panel looks different while that happens.
+  if (value != 0 && spindleMaxRpm > 0) {
+    Axis* a = getPitchAxis();
+    long maxRpm = calMaxRpmForPitch(a->speedManualMove, a->screwPitch, a->motorSteps, value, starts);
+    if (maxRpm > 0 && maxRpm < spindleMaxRpm) {
+      char msg[21];
+      snprintf(msg, sizeof(msg), "Max spindle %ldrpm", maxRpm);
+      splashError(msg);
+    }
+  }
   // Can't apply changes right away since we might be in the middle of motion logic.
   nextDupr = value;
   nextDuprFlag = true;
@@ -2751,6 +2838,13 @@ void setModeFromLoop(int value) {
     modeScopedLoad(settingModeOf(value));
   }
   mode = value;
+  // Remember it as its key's current screen, so that key comes back here rather than to the front
+  // of its list. Done here rather than at the key handlers so it also catches a mode arrived at
+  // from the settings menu, the serial interface or a restore at startup.
+  int group = modeGroupOf(value);
+  if (group != MODE_GROUP_NONE) {
+    lastModeInGroup[group] = value;
+  }
   setupIndex = 0;
   if (mode == MODE_ASYNC || mode == MODE_A1) {
     if (!timerAttached) {
@@ -2911,11 +3005,11 @@ void xRetractToggle() {
     xRetractReturnPos = x.pos;
     xRetracted = true;
     x.speedMax = x.speedManualMove;
-    stepToFinal(&x, target);
+    stepToFinalEnabled(&x, target);
   } else {
     xRetracted = false;
     x.speedMax = x.speedManualMove;
-    stepToFinal(&x, xRetractReturnPos);
+    stepToFinalEnabled(&x, xRetractReturnPos);
   }
 }
 
@@ -3089,19 +3183,14 @@ void setDir(Axis* a, bool dir) {
   }
 }
 
-void buttonModePress() {
-  if (mode == MODE_NORMAL) {
-    setModeFromTask(ACTIVE_A1 ? MODE_A1 : MODE_ELLIPSE);
-  } else if (mode == MODE_A1) {
-    setModeFromTask(MODE_ELLIPSE);
-  } else if (mode == MODE_ELLIPSE) {
-    setModeFromTask(MODE_GCODE);
-  } else if (mode == MODE_GCODE) {
-    setModeFromTask(MODE_ASYNC);
-  } else if (mode == MODE_ASYNC) {
-    setModeFromTask(MODE_SLOT);
+// A press of one of the keys that carries several screens. Coming from somewhere else it returns to
+// whichever of that key's screens was last in use; pressing it again moves along its ring. See the
+// block comment in modes.h for why.
+void modeButtonPress(int group) {
+  if (modeGroupOf(mode) == group) {
+    setModeFromTask(modeNextInGroup(mode, ACTIVE_A1));
   } else {
-    setModeFromTask(MODE_NORMAL);
+    setModeFromTask(lastModeInGroup[group]);
   }
 }
 
@@ -3373,7 +3462,28 @@ bool processNumpadResult(int keyCode) {
 
   // Potentially move by newDu in the given direction.
   // We don't support precision manual moves when ON yet. Can't stay in the thread for most modes.
-  if (!isOn && (keyCode == B_LEFT || keyCode == B_RIGHT || keyCode == B_UP || keyCode == B_DOWN || (mode == MODE_A1 && (keyCode == B_MODE_GEARS || keyCode == B_MODE_TURN)))) {
+  bool typedMoveKey = keyCode == B_LEFT || keyCode == B_RIGHT || keyCode == B_UP || keyCode == B_DOWN ||
+      (mode == MODE_A1 && (keyCode == B_MODE_GEARS || keyCode == B_MODE_TURN));
+  // Say so, rather than letting the key fall through.
+  //
+  // The typed number has already been consumed by resetNumpad() above, so it disappears off the
+  // screen whatever happens next. Without this the key then reached the plain held-key jog in
+  // processKeypadEvent(), which moves for exactly as long as the button is down - so a tap moved a
+  // fraction of the distance asked for, or nothing at all. Typing a distance and watching the
+  // number vanish with the carriage still where it was is the symptom that produces.
+  if (typedMoveKey && isOn) {
+    splashError("Turn off first");
+    return true;
+  }
+  // Say which axis, because a disabled one draws no position at all on the DRO line - so the
+  // screen gives no hint that the axis you just asked to move is the one that is switched off.
+  if (typedMoveKey && a->disabled) {
+    char msg[21];
+    snprintf(msg, sizeof(msg), "%c is disabled", a->name);
+    splashError(msg);
+    return true;
+  }
+  if (typedMoveKey) {
     if (pos < a->rightStop) {
       pos = a->rightStop;
       splashError("Limited by stop");
@@ -3385,7 +3495,7 @@ bool processNumpadResult(int keyCode) {
       return true;
     }
     a->speedMax = a->speedManualMove;
-    stepToFinal(a, pos);
+    stepToFinalEnabled(a, pos);
     return true;
   }
 
@@ -3401,6 +3511,12 @@ bool processNumpadResult(int keyCode) {
       beep();
       return true;
     }
+    if (a->disabled) {
+      char msg[21];
+      snprintf(msg, sizeof(msg), "%c is disabled", a->name);
+      splashError(msg);
+      return true;
+    }
     long target = newDu / a->screwPitch * a->motorSteps - a->originPos;
     if (target < a->rightStop) {
       target = a->rightStop;
@@ -3413,7 +3529,7 @@ bool processNumpadResult(int keyCode) {
       return true;
     }
     a->speedMax = a->speedManualMove;
-    stepToFinal(a, target);
+    stepToFinalEnabled(a, target);
     return true;
   }
 
@@ -3567,7 +3683,8 @@ void exitSettingsScreens() {
   inThreadPicker = false;
   resetNumpad();
   inNumpad = false;
-  lcdHashLine0 = LCD_HASH_INITIAL; // Force full redraw of the normal screen.
+  lcdNeedsClear = true; // Force full redraw of the normal screen, settings text wiped off first.
+  lcdHashLine0 = LCD_HASH_INITIAL;
   // When exiting with the off button, its release event goes through normal processing.
   // Without this, buttonOffRelease() would see a stale resetMillis and trigger a reset().
   resetMillis = millis();
@@ -4126,7 +4243,7 @@ String derivedAxisJson(Axis* a) {
   out += ",\"stopDu\":" + String(calStopDistanceDu(a->speedManualMove, a->speedStart, a->acceleration,
                                                    a->screwPitch, a->motorSteps));
   out += ",\"backlashSteps\":" + String(a->backlashSteps);
-  out += ",\"maxRpm\":" + String(calMaxRpmForPitch(a->speedManualMove, a->screwPitch, a->motorSteps, dupr));
+  out += ",\"maxRpm\":" + String(calMaxRpmForPitch(a->speedManualMove, a->screwPitch, a->motorSteps, dupr, starts));
   out += "}";
   return out;
 }
@@ -4728,7 +4845,10 @@ bool calRequestMove(Axis* a, long deltaSteps) {
     return false;
   }
   a->speedMax = a->speedManualMove;
-  stepToFinal(a, target);
+  // Same as the typed moves: nothing waits on this one, so it has to wake the driver itself. It
+  // matters more here than anywhere - these routines are measured against a dial indicator, so a
+  // move the motor slept through reads as zero travel and gets stored as a screw pitch.
+  stepToFinalEnabled(a, target);
   return true;
 }
 
@@ -5666,7 +5786,10 @@ void processKeypadEvent() {
   } else if (keyCode == B_STOPD) {
     buttonRightStopPress(&x);
   } else if (keyCode == B_MODE_OTHER) {
-    buttonModePress();
+    // Comes back to whichever of the keyless modes you were last in; pressing it again moves on
+    // through them. The gearbox is no longer part of this ring - the gear key reaches it directly,
+    // and leaving it here meant the ring passed through a mode that drives the carriage.
+    modeButtonPress(MODE_GROUP_OTHER);
   } else if (keyCode == B_DISPL) {
     buttonDisplayPress();
   } else if (keyCode == B_X) {
@@ -5683,8 +5806,9 @@ void processKeypadEvent() {
   } else if (keyCode == B_MEASURE) {
     buttonMeasurePress();
   } else if (keyCode == B_MODE_GEARS && mode != MODE_A1) {
-    // Pressing gear again swaps which axis the spindle drives.
-    setModeFromTask(mode == MODE_NORMAL ? MODE_XGEAR : MODE_NORMAL);
+    // Comes back to whichever gearbox you were last using; pressing it again swaps which axis the
+    // spindle drives.
+    modeButtonPress(MODE_GROUP_GEARBOX);
   } else if (keyCode == B_MODE_TURN && mode != MODE_A1) {
     setModeFromTask(MODE_TURN);
   } else if (keyCode == B_MODE_FACE) {
@@ -5699,29 +5823,56 @@ void processKeypadEvent() {
       setModeFromTask(MODE_CUT);
     }
   } else if (keyCode == B_MODE_THREAD) {
-    // Pressing thread again switches between a straight and a tapered thread.
-    mode == MODE_A1 || (mode == MODE_GCODE && ACTIVE_A1) ? markAxis0(&a1)
-        : setModeFromTask(mode == MODE_THREAD ? MODE_TPR : MODE_THREAD);
+    // Comes back to whichever thread you were last cutting; pressing it again switches between a
+    // straight and a tapered one.
+    if (mode == MODE_A1 || (mode == MODE_GCODE && ACTIVE_A1)) {
+      markAxis0(&a1);
+    } else {
+      modeButtonPress(MODE_GROUP_THREAD);
+    }
   }
 }
 
 // Moves the stepper so that the tool is located at the newPos.
 bool stepToContinuous(Axis* a, long newPos) {
-  return stepTo(a, newPos, true);
+  return stepTo(a, newPos, true, false);
 }
 
 bool stepToFinal(Axis* a, long newPos) {
-  return stepTo(a, newPos, false);
+  return stepTo(a, newPos, false, false);
 }
 
-bool stepTo(Axis* a, long newPos, bool continuous) {
+// A positioning move issued straight from a keypress, with no task waiting on it.
+//
+// A jog wakes the driver, sits on the move and lets it rest again. Nothing did that for a typed
+// distance, a typed coordinate or the X retract: on an axis set to rest between moves (needsRest -
+// the setting menu can turn it on, and it is what an open-loop driver wants) the enable line was
+// still low while the whole pulse train went out. The DRO counted every step, the motor never
+// turned, and jogging the same axis worked perfectly - which makes it look like the typed move is
+// broken rather than the driver asleep.
+//
+// moveAxis() hands the enable back when the move lands, since that is the only code that knows
+// when it did.
+void stepToFinalEnabled(Axis* a, long newPos) {
+  stepperEnable(a, true); // blocks ~100ms while the driver wakes, which a keypress can afford
+  if (!stepTo(a, newPos, false, true) || !a->autoRelease) {
+    // Refused, or already there - nothing will land, so give the enable straight back.
+    stepperEnable(a, false);
+  }
+}
+
+bool stepTo(Axis* a, long newPos, bool continuous, bool autoRelease) {
   if (xSemaphoreTake(a->mutex, 10) == pdTRUE) {
     a->continuous = continuous;
-    if (newPos == a->pos) {
-      a->pendingPos = 0;
-    } else {
-      a->pendingPos = newPos - a->motorPos - (newPos > a->pos ? 0 : a->backlashSteps);
-    }
+    long pending = (newPos == a->pos) ? 0
+        : newPos - a->motorPos - (newPos > a->pos ? 0 : a->backlashSteps);
+    // Claim the release only if there is really a move to wait for, and publish it before
+    // pendingPos. moveAxis() runs on the other core and reads pendingPos first: if it sees a move
+    // outstanding then autoRelease is already correct, and if it sees none it reads the previous
+    // move's flag, which is false. The other order leaves a window where it would see "nothing
+    // outstanding, release pending" mid-setup and drop the enable line during the move.
+    a->autoRelease = autoRelease && pending != 0;
+    a->pendingPos = pending;
     xSemaphoreGive(a->mutex);
     return true;
   }
@@ -5755,7 +5906,10 @@ void stepperEnable(Axis* a, bool value) {
   }
   if (value) {
     a->stepperEnableCounter++;
-    if (value == 1) {
+    // Only the first claim has to wake the driver. This read "value == 1", which for a bool is
+    // just "value" - so every nested claim re-ran updateEnable() and paid its 100ms settle again
+    // for a driver that was already awake.
+    if (a->stepperEnableCounter == 1) {
       updateEnable(a);
     }
   } else if (a->stepperEnableCounter > 0) {
@@ -5777,8 +5931,30 @@ void updateEnable(Axis* a) {
 }
 
 void moveAxis(Axis* a) {
+  // A disabled axis has its driver's enable line held low, so pulses go nowhere. Counting them
+  // anyway advanced pos, motorPos and posGlobal for motion that never happened: the DRO moved, the
+  // carriage did not, and the two stayed that far apart for as long as the machine was on. There is
+  // no scale on either axis to catch it, so the next cut is simply in the wrong place.
+  //
+  // Dropping the request rather than holding it means waitForPendingPos0() still finishes, and a
+  // re-enabled axis starts from where it actually is instead of lurching to work off a backlog.
+  if (a->disabled) {
+    a->pendingPos = 0;
+    // Hand back an enable claimed by a keypress-issued move, or the counter never returns to zero
+    // and the axis can never rest again once it is switched back on.
+    if (a->autoRelease) {
+      a->autoRelease = false;
+      stepperEnable(a, false);
+    }
+    return;
+  }
   // Most of the time a step isn't needed.
   if (a->pendingPos == 0) {
+    // A keypress-issued move has landed, so let the driver rest again if it wants to.
+    if (a->autoRelease) {
+      a->autoRelease = false;
+      stepperEnable(a, false);
+    }
     if (a->speed > a->speedStart) {
       a->speed--;
     }
@@ -6234,7 +6410,7 @@ void modeEllipse(Axis* main, Axis* aux) {
 }
 
 long mmOrInchToAbsolutePos(Axis* a, float mmOrInch) {
-  long scaleToDu = measure == MEASURE_METRIC ? 10000 : 254000;
+  long scaleToDu = gcodeInch ? 254000 : 10000;
   long part1 = a->gcodeRelativePos;
   long part2 = round(mmOrInch * scaleToDu / a->screwPitch * a->motorSteps);
   return part1 + part2;
@@ -6294,7 +6470,7 @@ void updateAxisSpeeds(long diffX, long diffZ, long diffA1) {
 void setFeedRate(const String& command) {
   float feed = getFloat(command, 'F');
   if (feed <= 0) return;
-  gcodeFeedDuPerSec = round(feed * (measure == MEASURE_METRIC ? 10000 : 254000) / 60.0);
+  gcodeFeedDuPerSec = round(feed * (gcodeInch ? 254000 : 10000) / 60.0);
 }
 
 void gcodeWaitEpsilon(int epsilon) {
@@ -6311,14 +6487,27 @@ void gcodeWaitStop() {
   gcodeWaitEpsilon(0);
 }
 
+// A G-code target, held to the same stops every other motion path obeys. Without this the
+// interpreter was the one way to move an axis that ignored the limits the operator had set: a
+// mistyped Z in a program drove into whatever the left stop was there to protect.
+long gcodeClamp(Axis* a, long pos) {
+  if (pos > a->leftStop) {
+    return a->leftStop;
+  }
+  if (pos < a->rightStop) {
+    return a->rightStop;
+  }
+  return pos;
+}
+
 // Rapid positioning / linear interpolation.
 void G00_01(const String& command) {
   long xStart = x.pos;
   long zStart = z.pos;
   long a1Start = a1.pos;
-  long xEnd = command.indexOf(x.name) >= 0 ? mmOrInchToAbsolutePos(&x, getFloat(command, x.name)) : xStart;
-  long zEnd = command.indexOf(z.name) >= 0 ? mmOrInchToAbsolutePos(&z, getFloat(command, z.name)) : zStart;
-  long a1End = command.indexOf(a1.name) >= 0 ? mmOrInchToAbsolutePos(&a1, getFloat(command, a1.name)) : a1Start;
+  long xEnd = command.indexOf(x.name) >= 0 ? gcodeClamp(&x, mmOrInchToAbsolutePos(&x, getFloat(command, x.name))) : xStart;
+  long zEnd = command.indexOf(z.name) >= 0 ? gcodeClamp(&z, mmOrInchToAbsolutePos(&z, getFloat(command, z.name))) : zStart;
+  long a1End = command.indexOf(a1.name) >= 0 ? gcodeClamp(&a1, mmOrInchToAbsolutePos(&a1, getFloat(command, a1.name))) : a1Start;
   long xDiff = xEnd - xStart;
   long zDiff = zEnd - zStart;
   long a1Diff = a1End - a1Start;
@@ -6344,7 +6533,8 @@ bool handleGcode(const String& command) {
   if (op == 0 || op == 1) { // 0 also covers X and Z commands without G.
     G00_01(command);
   } else if (op == 20 || op == 21) {
-    setMeasure(op == 20 ? MEASURE_INCH : MEASURE_METRIC);
+    // Changes how this program is read, not what the panel displays.
+    gcodeInch = (op == 20);
   } else if (op == 90 || op == 91) {
     gcodeAbsolutePositioning = op == 90;
   } else if (op == 94) {
