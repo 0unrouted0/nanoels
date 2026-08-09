@@ -17,8 +17,17 @@
 #define MODE_PASSES_MAX 999
 #define MODE_SPRING_PASSES_MAX 99
 
+// What a mode's default pass count itself starts at, on a controller that has never been set up.
+#define MODE_PASSES_DEFAULT 3
+
 struct ModeSettings {
+  // The count this mode is using now. Kept per mode so switching away to face something and back
+  // does not lose the count dialled in for threading, but never written to flash: how many cuts it
+  // takes to reach depth belongs to the job, and a count carried over from last week looks like a
+  // considered answer while being nothing of the kind. A restart brings it back to defaultPasses.
   long passes;
+  // The count this mode starts from. This one is stored, and is what the settings menu edits.
+  long defaultPasses;
   long springPasses;
   long clearanceDu;
   long peckDu;
@@ -30,7 +39,7 @@ struct ModeSettings {
 };
 
 inline long modeSettingRead(const ModeSettings* s, const char* key) {
-  if (!strcmp(key, "tps")) return s->passes;
+  if (!strcmp(key, "tps")) return s->defaultPasses;
   if (!strcmp(key, "spp")) return s->springPasses;
   if (!strcmp(key, "safe")) return s->clearanceDu;
   if (!strcmp(key, "pck")) return s->peckDu;
@@ -45,6 +54,9 @@ inline long modeSettingRead(const ModeSettings* s, const char* key) {
 inline const char* modeSettingWrite(ModeSettings* s, const char* key, long value) {
   if (!strcmp(key, "tps")) {
     if (value < 1 || value > MODE_PASSES_MAX) return "Must be 1 or above";
+    s->defaultPasses = value;
+    // Take effect now rather than at the next restart. Setting a default and watching the mode go
+    // on using the old count would read as the setting not having been saved.
     s->passes = value;
   } else if (!strcmp(key, "spp")) {
     if (value < 0 || value > MODE_SPRING_PASSES_MAX) return "Must be 0 to 99";

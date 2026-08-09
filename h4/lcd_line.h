@@ -26,6 +26,22 @@
 // character 0, which would terminate the buffer. They travel as placeholders and whatever prints
 // the line maps them back.
 #define LCD_GLYPH_MM '\x01'
+#define LCD_GLYPH_DIA '\x02'
+#define LCD_GLYPH_DEG '\x03'
+// The stop-span line labels its two fields with the limit arrows rather than with axis letters.
+#define LCD_GLYPH_LR '\x04'
+#define LCD_GLYPH_UD '\x05'
+
+// Columns each axis gets on the position line. Two of them fill the display exactly, which is the
+// point: the widest a field can be is its name, eight digits of "-300.000" and a unit glyph, so at
+// full travel the pair came to 22 characters on a 20 character row.
+//
+// Those two extra characters do not fall off the end. An HD44780 in two-line mode runs its address
+// counter 0x00-0x27 and then jumps to 0x40, and a 20x4 panel maps row 2 to 0x14-0x27 and row 1 to
+// 0x40-0x53 - so the 21st character of the position line lands on the first column of the pitch
+// line, and the 22nd on its second. The tail of a position wrote itself over the start of "Pitch",
+// redrawing every time an axis moved.
+#define LCD_DRO_FIELD 10
 
 struct LcdLine {
   char buf[LCD_LINE_MAX + 1];
@@ -129,6 +145,41 @@ inline void lcdLineDeciMicrons(LcdLine* l, long deciMicrons, int precisionPoints
 // Room left before the line is full.
 inline int lcdLineRoom(const LcdLine* l) {
   return LCD_LINE_MAX - l->len;
+}
+
+// An angle, for a rotational axis. Mirrors printDegrees().
+inline void lcdLineDegrees(LcdLine* l, long degrees10000) {
+  int points = 0;
+  if ((degrees10000 % 100) != 0) points = 3;
+  else if ((degrees10000 % 1000) != 0) points = 2;
+  else if ((degrees10000 % 10000) != 0) points = 1;
+  lcdLineFixed(l, degrees10000 / 10000.0, points);
+  lcdLineChar(l, LCD_GLYPH_DEG);
+}
+
+// One axis on the position line: its name glyph, then where it is, clipped and padded to exactly
+// LCD_DRO_FIELD columns so the field beside it always starts in the same place and the pair cannot
+// overrun the row. Pass show=false for an axis that is not fitted or has been switched off, which
+// leaves its columns blank rather than shuffling the other one across.
+inline void lcdLineDroField(LcdLine* l, char nameGlyph, long du, bool rotational, bool metric,
+                            bool show) {
+  int start = l->len;
+  if (show) {
+    lcdLineChar(l, nameGlyph);
+    if (rotational) {
+      lcdLineDegrees(l, du);
+    } else {
+      lcdLineDeciMicrons(l, du, 3, metric);
+    }
+    // Only reachable at the extremes of travel, and losing the unit glyph off the end of a number
+    // is a far better outcome than writing it onto another line.
+    if (l->len > start + LCD_DRO_FIELD) {
+      l->len = start + LCD_DRO_FIELD;
+      l->buf[l->len] = 0;
+      l->truncated = true;
+    }
+  }
+  lcdLinePad(l, start + LCD_DRO_FIELD);
 }
 
 #endif // LCD_LINE_H

@@ -195,7 +195,10 @@ inline bool calRpmAccumulate(int* index, int delta, long rpmBulk) {
 // wrapped value would come back as a plausible move in the wrong direction rather than an error.
 #define CAL_NUMPAD_DU_MAX 100000000L // 10 metres, past any lathe and any axis limit
 
-inline long calNumpadToDu(long digits, int fracDigits, bool inchMode) {
+// The sign arrives separately because the panel has no minus key - plus and minus flip it while an
+// entry is under way. It is applied last, after the magnitude has been clamped, so a negative is
+// held to the same limit as a positive rather than escaping it.
+inline long calNumpadToDu(long digits, int fracDigits, bool inchMode, bool negative = false) {
   if (digits <= 0 || fracDigits < 0) {
     return 0;
   }
@@ -205,7 +208,8 @@ inline long calNumpadToDu(long digits, int fracDigits, bool inchMode) {
     den *= 10;
   }
   long long v = (num + den / 2) / den; // round half up, so 0.0001in is 25du and not 25.4 truncated
-  return v > CAL_NUMPAD_DU_MAX ? CAL_NUMPAD_DU_MAX : (long)v;
+  long du = v > CAL_NUMPAD_DU_MAX ? CAL_NUMPAD_DU_MAX : (long)v;
+  return negative ? -du : du;
 }
 
 // The same typed number as a plain value, with its point applied and no unit attached: digits 425
@@ -214,12 +218,12 @@ inline long calNumpadToDu(long digits, int fracDigits, bool inchMode) {
 // For the two figures on the machine that take a decimal but are not distances - a taper ratio and
 // a thread count - so there is nothing to convert into millimetres or inches. Both are used as
 // floats downstream anyway, which is why this one does not stay in integers.
-inline double calNumpadValue(long digits, int fracDigits) {
+inline double calNumpadValue(long digits, int fracDigits, bool negative = false) {
   double v = (double)digits;
   for (int i = 0; i < fracDigits && i < 9; i++) {
     v /= 10.0;
   }
-  return v;
+  return negative ? -v : v;
 }
 
 // ---------------------------------------------------------------------------

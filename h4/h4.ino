@@ -53,6 +53,14 @@ const float CONE_RATIO_MAX = 100;
 const long SAVE_DELAY_US = 5000000; // Wait 5s after last save and last change of saveable data before saving again
 const long DIRECTION_SETUP_DELAY_US = 5; // Stepper driver needs some time to adjust to direction change
 const long STEPPED_ENABLE_DELAY_MS = 100; // Delay after stepper is enabled and before issuing steps
+// How long the driver stays awake after the last manual movement, on an axis set to rest when idle.
+//
+// Taking and dropping the enable line around every keypress costs real position: an open-loop motor
+// re-detents to the nearest full step each time it is energised, and nothing counts that. Two ways
+// it used to happen constantly - a finger slipping off a key and back on, and standing on a soft
+// stop with the key held, which cycled the line about ten times a second. Holding it awake across a
+// burst of jogging costs a little heat and keeps the position honest.
+const unsigned long MANUAL_ENABLE_HOLD_MS = 1000;
 
 // Version of the pref storage format, should be changed when non-backward-compatible
 // changes are made to the storage logic, resulting in Preferences wipe on first start.
@@ -105,6 +113,8 @@ const int GCODE_MIN_RPM = 30; // pause GCode execution if RPM is below this
 #define PREF_MODE "mod"
 #define PREF_MEASURE "mea"
 #define PREF_CONE_RATIO "cr"
+// Legacy: the pass count used to be one global saved here. Read only as the fallback for a mode's
+// stored default on a controller upgrading from before per-mode defaults existed; never written.
 #define PREF_TURN_PASSES "tp"
 #define PREF_MOVE_STEP "ms"
 #define PREF_AUX_FORWARD "af"
@@ -239,6 +249,10 @@ int numpadDigits[20];
 int numpadIndex = 0;
 // Digits typed before the decimal point, or -1 when none has been entered.
 int numpadPointAt = -1;
+// Whether the number being typed is negative. There is no minus key on the panel: plus and minus
+// both flip the sign once an entry is under way, the way a calculator's +/- key does. Cleared
+// whenever a fresh entry starts, so a sign never carries over into the next number.
+bool numpadNegative = false;
 
 bool isOn = false;
 bool nextIsOn; // isOn value that should be applied asap
@@ -482,8 +496,9 @@ float savedConeRatio = 0; // value of coneRatio saved in Preferences
 float nextConeRatio = 0; // coneRatio that should be applied asap
 bool nextConeRatioFlag = false; // whether nextConeRatio requires attention
 
-int turnPasses = 3; // In turn mode, how many turn passes to make
-int savedTurnPasses = 0; // value of turnPasses saved in Preferences
+// How many passes the current mode is making. Live copy of modeSet[mode].passes - see
+// ModeSettings for why it has no "saved" twin: nothing writes it to Preferences.
+int turnPasses = MODE_PASSES_DEFAULT;
 
 long setupIndex = 0; // Index of automation setup step
 bool auxForward = true; // True for external, false for external thread
@@ -614,6 +629,9 @@ bool flankInfeed = false; // Whether threading passes use 29.5-degree flank infe
 long retractDu = 20000; // One-key retract & return distance in deci-microns
 long slotLeftReductionDu = 0; // Slotting: shorten each successive left stroke by this, 0 = full length
 bool xDiameterDisplay = false; // Show and enter X values as diameter instead of radius
+// Whether an over-travel move trips the emergency stop. See the settings table for why it can be
+// turned off: the check is only as good as the max travel figures it measures against.
+bool estopTravelEnabled = true;
 
 // WiFi access point and over-the-air updates. Read once during setup(), so changing wifiEnabled
 // takes a restart - the settings item says so.
@@ -968,6 +986,14 @@ int printLcdLine(const LcdLine* l) {
   for (int i = 0; i < l->len; i++) {
     if (l->buf[i] == LCD_GLYPH_MM) {
       lcd.write(customCharMmCode);
+    } else if (l->buf[i] == LCD_GLYPH_DIA) {
+      lcd.write(customCharDiaCode);
+    } else if (l->buf[i] == LCD_GLYPH_DEG) {
+      lcd.write((uint8_t) 223); // the ROM degree symbol, not a custom glyph
+    } else if (l->buf[i] == LCD_GLYPH_LR) {
+      lcd.write(customCharLimLeftRightCode);
+    } else if (l->buf[i] == LCD_GLYPH_UD) {
+      lcd.write(customCharLimUpDownCode);
     } else {
       lcd.write((uint8_t) l->buf[i]);
     }
@@ -1005,7 +1031,6 @@ void modeScopedStore(int sm) {
 void modeScopedLoad(int sm) {
   if (sm == SMODE_NONE) return;
   turnPasses = modeSet[sm].passes;
-  savedTurnPasses = turnPasses; // it has not changed, it belongs to a different mode now
   springPasses = modeSet[sm].springPasses;
   safeDistanceDu = modeSet[sm].clearanceDu;
   peckDepthDu = modeSet[sm].peckDu;
@@ -1367,14 +1392,20 @@ void updateDisplay() {
       charIndex += printDeciMicrons(moveStep, 5);
     } else {
       if (needZStops()) {
-        charIndex += lcd.write(customCharLimLeftRightCode);
-        charIndex += printAxisStopDiff(&z, true);
-        while (charIndex < 10) charIndex += lcd.print(" ");
+        // Same two ten-column fields as the position line, and the same reason for building it
+        // rather than printing it: a 300mm Z span beside an X span came to 22 characters, and the
+        // two that did not fit landed on the start of the position line. See LCD_DRO_FIELD.
+        LcdLine spans;
+        lcdLineClear(&spans);
+        bool metricNow = measure == MEASURE_METRIC;
+        lcdLineDroField(&spans, LCD_GLYPH_LR, getAxisStopDiffDu(&z), z.rotational, metricNow, true);
+        lcdLineDroField(&spans, LCD_GLYPH_UD, getAxisStopDiffDu(&x), x.rotational, metricNow, true);
+        charIndex += printLcdLine(&spans);
       } else {
         charIndex += printMode();
+        charIndex += lcd.write(customCharLimUpDownCode);
+        charIndex += printAxisStopDiff(&x, false);
       }
-      charIndex += lcd.write(customCharLimUpDownCode);
-      charIndex += printAxisStopDiff(&x, false);
     }
     printLcdSpaces(charIndex);
   }
@@ -1401,9 +1432,20 @@ void updateDisplay() {
     lcdHashLine2 = newHashLine2;
     charIndex = 0;
     lcd.setCursor(0, 2);
-    charIndex += printAxisPosWithName(&z, true);
-    while (charIndex < 10) charIndex += lcd.print(" ");
-    charIndex += printAxisPosWithName(&x, true);
+    // Composed rather than printed straight out, because this is the line that was overrunning:
+    // see LCD_DRO_FIELD. The builder cannot exceed the display width, so whatever it does at the
+    // extremes of travel stays on its own row.
+    LcdLine dro;
+    lcdLineClear(&dro);
+    bool metricNow = measure == MEASURE_METRIC;
+    lcdLineDroField(&dro, z.name, getAxisPosDu(&z), z.rotational, metricNow,
+                    z.active && !z.disabled);
+    // X reads as a diameter when that is switched on, which doubles the number and takes the
+    // diameter symbol in place of the axis letter.
+    bool xDia = xDiameterDisplay && !x.rotational;
+    lcdLineDroField(&dro, xDia ? LCD_GLYPH_DIA : x.name, getAxisPosDu(&x) * (xDia ? 2 : 1),
+                    x.rotational, metricNow, x.active && !x.disabled);
+    charIndex += printLcdLine(&dro);
     printLcdSpaces(charIndex);
   }
 
@@ -1416,7 +1458,7 @@ void updateDisplay() {
   // Indexing reads the spindle whether or not the angle display is on, so it has to put
   // spindlePos in the hash too - without it the line would not refresh as the chuck turns.
   long newHashLine3 = z.pos + ((showAngle || indexDivisions > 1) ? spindlePos : -1) + (showTacho ? rpm + x.originPos : -2) + (splashActive() ? splashId * 7919 : -3) +
-      (joystickUse && joystickPinActive[4] ? 2000 + joystickDirPressed[0] + 2 * joystickDirPressed[1] + 4 * joystickDirPressed[2] + 8 * joystickDirPressed[3] : 0) + measure + (numpadResult > 0 ? numpadResult : -1) + mode * 5 + dupr +
+      (joystickUse && joystickPinActive[4] ? 2000 + joystickDirPressed[0] + 2 * joystickDirPressed[1] + 4 * joystickDirPressed[2] + 8 * joystickDirPressed[3] : 0) + measure + (numpadResult > 0 ? numpadResult : -1) + (numpadNegative ? 7919 : 0) + mode * 5 + dupr +
       (mode == MODE_CONE || mode == MODE_TPR ? round(coneRatio * 10000) : 0) + turnPasses + opIndex + setupIndex + gcodeProgramIndex + gcodeProgramCount + spindleStopped * 3 + (isOn ? 139 : -117) + (inNumpad ? 10 : 0) + (auxForward ? 17 : -31) + (xRetracted ? 55 : 0) +
       (z.leftStop == LONG_MAX ? 123 : z.leftStop) + (z.rightStop == LONG_MIN ? 1234 : z.rightStop) +
       (x.leftStop == LONG_MAX ? 1235 : x.leftStop) + (x.rightStop == LONG_MIN ? 123456 : x.rightStop) + gcodeCommandHash +
@@ -1643,7 +1685,12 @@ void setAsyncTimerEnable(bool value) {
 
 void taskDisplay(void *param) {
   unsigned long lastLcdMs = 0;
-  while (emergencyStop == ESTOP_NONE) {
+  while (true) {
+    if (emergencyStop != ESTOP_NONE) {
+      updateEstopDisplay();
+      taskYIELD();
+      continue;
+    }
     // Rate-limited rather than free-running: see LCD_MIN_UPDATE_MS. The per-line hashes already
     // skip unchanged content, but without this a value that changes every loop gets rewritten
     // faster than it can be read or the display can settle.
@@ -1674,11 +1721,28 @@ void taskDisplay(void *param) {
         noTone(BUZZ);
       }
     }
-    if (abs(z.pendingPos) > z.estopSteps || abs(x.pendingPos) > x.estopSteps) {
+    // A commanded move longer than the whole travel of the axis. estopSteps of 0 or less means no
+    // usable max travel is configured, and comparing against it would trip on every move rather
+    // than on a runaway - so an unconfigured axis is not guarded rather than being unusable.
+    if (estopTravelEnabled &&
+        ((z.estopSteps > 0 && abs(z.pendingPos) > z.estopSteps) ||
+         (x.estopSteps > 0 && abs(x.pendingPos) > x.estopSteps))) {
       setEmergencyStop(ESTOP_POS);
     }
     taskYIELD();
   }
+}
+
+// The emergency stop screen. Drawn from taskDisplay's loop like any other screen, rather than once
+// on the way out of it - the task now stays alive so the stop can be cleared, and the screen has to
+// stay on the glass until it is.
+long estopLcdHash = LCD_HASH_INITIAL;
+
+void updateEstopDisplay() {
+  if (estopLcdHash == emergencyStop) {
+    return;
+  }
+  estopLcdHash = emergencyStop;
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("EMERGENCY STOP");
@@ -1704,15 +1768,19 @@ void taskDisplay(void *param) {
     lcd.setCursor(0, 2);
     lcd.print("manual move");
   }
-  vTaskDelete(NULL);
+  // The way out, on the screen rather than in the manual - this is not a state anyone is in often
+  // enough to remember the trick for.
+  lcd.setCursor(0, 3);
+  lcd.print("Hold OFF + ON: clear");
 }
 
+// Never exits, even under an emergency stop: it is the only thing that can hear the keys that
+// clear one. processKeypadEvent() sends everything to processEstopKeypress() while the stop holds.
 void taskKeypad(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  while (true) {
     processKeypadEvent();
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 void waitForPendingPosNear0(Axis* a) {
@@ -1783,11 +1851,29 @@ int getAndResetPulses(Axis* a) {
 }
 
 void taskMoveZ(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  // The driver is woken once for a burst of jogging and let go a moment after the last of it,
+  // rather than around each press. See MANUAL_ENABLE_HOLD_MS for what that was costing.
+  bool enableHeld = false;
+  unsigned long enableUntilMs = 0;
+  while (true) {
+    // Idle rather than exit while a stop holds, so the task is still here to jog with once it is
+    // cleared. Nothing below may run: it commands motion.
+    if (emergencyStop != ESTOP_NONE) {
+      if (enableHeld) {
+        stepperEnable(&z, false);
+        enableHeld = false;
+      }
+      taskYIELD();
+      continue;
+    }
     int pulseDelta = getAndResetPulses(&z);
     bool left = buttonLeftPressed;
     bool right = buttonRightPressed;
     if (!left && !right && pulseDelta == 0) {
+      if (enableHeld && (long)(millis() - enableUntilMs) >= 0) {
+        stepperEnable(&z, false);
+        enableHeld = false;
+      }
       taskYIELD();
       continue;
     }
@@ -1808,8 +1894,15 @@ void taskMoveZ(void *param) {
       }
     }
     int sign = pulseDelta == 0 ? (left ? 1 : -1) : (pulseDelta > 0 ? 1 : -1);
-    bool stepperOn = true;
-    stepperEnable(&z, true);
+    if (!enableHeld) {
+      stepperEnable(&z, true);
+      enableHeld = true;
+    }
+    // A jog always begins from rest, so begin at the axis's start speed. setDir() only resets it on
+    // a change of direction, so releasing a key and pressing it again the same way kept whatever
+    // speed the last burst had ramped to - and the motor was then asked to start at it from a dead
+    // stop, which is a stall, and a stall is exactly the steps that go missing.
+    z.speed = z.speedStart;
     z.movingManually = true;
     if (isOn && dupr != 0 && mode == MODE_NORMAL) {
       // Move by moveStep in the desired direction but stay in the thread by possibly traveling a little more.
@@ -1837,12 +1930,10 @@ void taskMoveZ(void *param) {
           stepToContinuous(&z, newPos);
           waitForPendingPosNear0(&z);
         } else if (z.pos == (left ? z.leftStop : z.rightStop)) {
-          // We're standing on a stop with the L/R move button pressed.
+          // Standing on a stop with the L/R move button pressed. The driver stays awake: it used to
+          // be switched off here, and switching it back on for the next movement re-detents the
+          // rotor by up to a full step, which is position lost that nothing counts.
           resting = true;
-          if (stepperOn) {
-            stepperEnable(&z, false);
-            stepperOn = false;
-          }
           DELAY(200);
         }
       } while (left ? buttonLeftPressed : buttonRightPressed);
@@ -1872,6 +1963,14 @@ void taskMoveZ(void *param) {
       } while (delta != 0 && (left ? buttonLeftPressed : buttonRightPressed));
       z.continuous = false;
       waitForPendingPos0(&z);
+      // The stop clamped the move to nothing, but the key is still down. Sit here until it comes
+      // up: letting the outer loop re-enter instead meant taking and dropping the driver's enable
+      // line on every pass, about ten times a second, for as long as the operator leaned on the
+      // key - and each cycle walked the rotor.
+      while (delta == 0 && emergencyStop == ESTOP_NONE &&
+             (left ? buttonLeftPressed : buttonRightPressed)) {
+        taskYIELD();
+      }
       if (isOn && mode == MODE_CONE) {
         if (xSemaphoreTake(motionMutex, 100) != pdTRUE) {
           setEmergencyStop(ESTOP_MARK_ORIGIN);
@@ -1885,21 +1984,34 @@ void taskMoveZ(void *param) {
       }
     }
     z.movingManually = false;
-    if (stepperOn) {
-      stepperEnable(&z, false);
-    }
+    // Kept awake for a moment rather than released here, so a slipped finger or a second press does
+    // not cost another enable cycle. The idle branch above lets it go once the time is up.
+    enableUntilMs = millis() + MANUAL_ENABLE_HOLD_MS;
     z.speedMax = LONG_MAX;
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 void taskMoveX(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  bool enableHeld = false; // see taskMoveZ
+  unsigned long enableUntilMs = 0;
+  while (true) {
+    if (emergencyStop != ESTOP_NONE) { // see taskMoveZ
+      if (enableHeld) {
+        stepperEnable(&x, false);
+        enableHeld = false;
+      }
+      taskYIELD();
+      continue;
+    }
     int pulseDelta = getAndResetPulses(&x);
     bool up = buttonUpPressed || pulseDelta > 0;
     bool down = buttonDownPressed || pulseDelta < 0;
     if (!up && !down) {
+      if (enableHeld && (long)(millis() - enableUntilMs) >= 0) {
+        stepperEnable(&x, false);
+        enableHeld = false;
+      }
       taskYIELD();
       continue;
     }
@@ -1912,7 +2024,11 @@ void taskMoveX(void *param) {
     }
     x.movingManually = true;
     x.speedMax = getStepMaxSpeed(&x);
-    stepperEnable(&x, true);
+    if (!enableHeld) {
+      stepperEnable(&x, true);
+      enableHeld = true;
+    }
+    x.speed = x.speedStart; // see taskMoveZ: a jog always begins from rest
 
     int delta = 0;
     int sign = up ? 1 : -1;
@@ -1938,6 +2054,11 @@ void taskMoveX(void *param) {
     } while (delta != 0 && (pulseDelta != 0 || (up ? buttonUpPressed : buttonDownPressed)));
     x.continuous = false;
     waitForPendingPos0(&x);
+    // Standing on a stop with the key still down - see taskMoveZ.
+    while (delta == 0 && emergencyStop == ESTOP_NONE &&
+           (up ? buttonUpPressed : buttonDownPressed)) {
+      taskYIELD();
+    }
     if (isOn && mode == MODE_CONE) {
       if (xSemaphoreTake(motionMutex, 100) != pdTRUE) {
         setEmergencyStop(ESTOP_MARK_ORIGIN);
@@ -1948,24 +2069,40 @@ void taskMoveX(void *param) {
     }
     x.movingManually = false;
     x.speedMax = LONG_MAX;
-    stepperEnable(&x, false);
-
+    enableUntilMs = millis() + MANUAL_ENABLE_HOLD_MS; // see taskMoveZ
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 void taskMoveA1(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  bool enableHeld = false; // see taskMoveZ
+  unsigned long enableUntilMs = 0;
+  while (true) {
+    if (emergencyStop != ESTOP_NONE) { // see taskMoveZ
+      if (enableHeld) {
+        stepperEnable(&a1, false);
+        enableHeld = false;
+      }
+      taskYIELD();
+      continue;
+    }
     bool plus = buttonTurnPressed;
     bool minus = buttonGearsPressed;
     if (mode != MODE_A1 || (!plus && !minus)) {
+      if (enableHeld && (long)(millis() - enableUntilMs) >= 0) {
+        stepperEnable(&a1, false);
+        enableHeld = false;
+      }
       taskYIELD();
       continue;
     }
     a1.movingManually = true;
     a1.speedMax = getStepMaxSpeed(&a1);
-    stepperEnable(&a1, true);
+    if (!enableHeld) {
+      stepperEnable(&a1, true);
+      enableHeld = true;
+    }
+    a1.speed = a1.speedStart; // see taskMoveZ: a jog always begins from rest
 
     int delta = 0;
     int sign = plus ? 1 : -1;
@@ -1983,21 +2120,30 @@ void taskMoveA1(void *param) {
       }
       stepToContinuous(&a1, posCopy + delta);
       waitForStep(&a1);
-    } while (plus ? buttonTurnPressed : buttonGearsPressed);
+    } while (delta != 0 && (plus ? buttonTurnPressed : buttonGearsPressed));
     a1.continuous = false;
     waitForPendingPos0(&a1);
+    // Standing on a stop with the key still down - see taskMoveZ.
+    while (delta == 0 && emergencyStop == ESTOP_NONE &&
+           (plus ? buttonTurnPressed : buttonGearsPressed)) {
+      taskYIELD();
+    }
     // Restore async direction.
     if (isOn && mode == MODE_A1) updateAsyncTimerSettings();
     a1.movingManually = false;
     a1.speedMax = LONG_MAX;
-    stepperEnable(&a1, false);
+    enableUntilMs = millis() + MANUAL_ENABLE_HOLD_MS; // see taskMoveZ
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 void taskGcode(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  while (true) {
+    if (emergencyStop != ESTOP_NONE) { // see taskMoveZ
+      gcodeInitialized = false; // a cleared stop restarts the program from the top, not mid-line
+      taskYIELD();
+      continue;
+    }
     if (mode != MODE_GCODE) {
       gcodeInitialized = false;
     } else if (!gcodeInitialized) {
@@ -2147,7 +2293,6 @@ void taskGcode(void *param) {
     }
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 bool saveGcode() {
@@ -2277,12 +2422,52 @@ void taskAttachInterrupts(void *param) {
   vTaskDelete(NULL);
 }
 
+// Stops everything. The flag is what does it: loop() returns on it before any motion logic runs,
+// every task checks it, and the async timer is stopped outright.
+//
+// It used to also take all three axis mutexes and never give them back, which stopped stepTo() as
+// well - belt and braces on top of the flag. That is why the state could not be left: a FreeRTOS
+// mutex may only be given by the task that took it, and the task that trips the stop is rarely the
+// one that would clear it. The flag alone is enough, and it can be undone.
 void setEmergencyStop(int kind) {
   emergencyStop = kind;
   setAsyncTimerEnable(false);
-  xSemaphoreTake(z.mutex, 10);
-  xSemaphoreTake(x.mutex, 10);
-  xSemaphoreTake(a1.mutex, 10);
+}
+
+// Let the operator out of it. Deliberately awkward to reach - see processEstopKeypress().
+//
+// Everything outstanding is dropped rather than resumed. Whatever was commanded when the stop
+// tripped is not what anyone wants to carry on with, and on a travel stop it is the very thing
+// that tripped it - restoring it would trip again on the next pass through taskDisplay.
+void clearEmergencyStop() {
+  z.pendingPos = 0;
+  x.pendingPos = 0;
+  a1.pendingPos = 0;
+  z.autoRelease = false;
+  x.autoRelease = false;
+  a1.autoRelease = false;
+  z.movingManually = false;
+  x.movingManually = false;
+  a1.movingManually = false;
+  // Comes back switched off, whatever it was doing. Set directly rather than through
+  // setIsOnFromLoop(), which marks a new origin and would move the datum out from under a machine
+  // whose position the operator is about to check.
+  isOn = false;
+  nextIsOnFlag = false;
+  setupIndex = 0;
+  opIndex = 0;
+  opSubIndex = 0;
+  buttonOffPressed = false;
+  emergencyStop = ESTOP_NONE;
+  // The async modes drive from the timer rather than from loop(), so it has to come back or they
+  // would be silently dead. isOn is false, so the handler returns immediately until ON is pressed.
+  if (mode == MODE_ASYNC || mode == MODE_A1) {
+    setAsyncTimerEnable(true);
+  }
+  lcdNeedsClear = true;
+  // Or a second stop of the same kind would match the cached hash and never draw its screen.
+  estopLcdHash = LCD_HASH_INITIAL;
+  beepFor(BEEP_ACK);
 }
 
 // Configures the six auxiliary terminals from the current device flags, and is the only code that
@@ -2425,12 +2610,23 @@ void setup() {
     settingKeyName(i, key);
     int sm = SETTINGS[i].mode;
     const char* k = SETTINGS[i].prefKey;
-    if (!strcmp(k, "tps")) modeSet[sm].passes = pref.getLong(key, pref.getInt(PREF_TURN_PASSES, 3));
+    if (!strcmp(k, "tps")) modeSet[sm].defaultPasses = pref.getLong(key, pref.getInt(PREF_TURN_PASSES, MODE_PASSES_DEFAULT));
     else if (!strcmp(k, "spp")) modeSet[sm].springPasses = pref.getLong(key, pref.getLong("spp", 0));
     else if (!strcmp(k, "safe")) modeSet[sm].clearanceDu = pref.getLong(key, pref.getLong("safe", SAFE_DISTANCE_DU));
     else if (!strcmp(k, "pck")) modeSet[sm].peckDu = pref.getLong(key, pref.getLong("pck", 0));
     else if (!strcmp(k, "fli")) modeSet[sm].flankInfeed = pref.getBool(key, pref.getBool("fli", false));
     else if (!strcmp(k, "slt")) modeSet[sm].slotReductionDu = pref.getLong(key, pref.getLong("slt", 0));
+  }
+  // Every mode opens on its own default. This is the only place the working count is seeded, which
+  // is what makes "not kept across a restart" true - nothing writes it back, so a power cycle is
+  // always a clean start. A mode with no stored default still gets one: the loop above leaves
+  // defaultPasses at whatever was read, and modes absent from the table keep the array's zero,
+  // which the clamp below turns into MODE_PASSES_DEFAULT rather than a count of nothing.
+  for (int sm = 0; sm < SMODE_COUNT; sm++) {
+    if (modeSet[sm].defaultPasses < 1 || modeSet[sm].defaultPasses > MODE_PASSES_MAX) {
+      modeSet[sm].defaultPasses = MODE_PASSES_DEFAULT;
+    }
+    modeSet[sm].passes = modeSet[sm].defaultPasses;
   }
   // The taper has no table row - see ModeSettings - so it is read directly. Both modes fall back to
   // the old shared value, which is what they were both using before they were separated.
@@ -2455,6 +2651,7 @@ void setup() {
   delayBetweenStepsMs = pref.getLong("sdl", DELAY_BETWEEN_STEPS_MS);
   indexDivisions = pref.getLong("idiv", INDEX_DIVISIONS);
   indexToleranceTenths = pref.getLong("itol", INDEX_TOLERANCE_TENTHS_DEG);
+  estopTravelEnabled = pref.getBool("estp", true);
   cssEnabled = pref.getBool("cson", CSS_ENABLED);
   cssMaterial = pref.getLong("cmat", CSS_MATERIAL);
   cssCarbide = pref.getBool("ctol", CSS_CARBIDE);
@@ -2530,7 +2727,8 @@ void setup() {
   savedMeasure = measure = pref.getInt(PREF_MEASURE);
   // The taper is loaded per mode further up and handed to the live copy by modeScopedLoad(), so
   // there is nothing to read from the old shared key here.
-  savedTurnPasses = turnPasses = pref.getInt(PREF_TURN_PASSES, turnPasses);
+  // The pass count is not read from Preferences: modeScopedLoad() above has already taken it from
+  // the mode's own set, which was seeded from that mode's stored default.
   savedAuxForward = auxForward = pref.getBool(PREF_AUX_FORWARD, true);
   pref.end();
 
@@ -2573,12 +2771,16 @@ void setup() {
   xTaskCreatePinnedToCore(taskDisplay, "taskDisplay", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
 
   delay(100);
+  // A key already down before anything has been pressed means a stuck switch or a shorted panel,
+  // and a stuck key on a machine that moves is worth stopping for.
+  //
+  // Every task is still started. This used to return here, which left the stop with no keypad task
+  // to hear it and no motion tasks to use afterwards - unclearable by construction, and a power
+  // cycle the only way out. They all idle on the flag instead.
   if (keypad.available()) {
     setEmergencyStop(ESTOP_KEY);
-    return;
-  } else {
-    xTaskCreatePinnedToCore(taskKeypad, "taskKeypad", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
   }
+  xTaskCreatePinnedToCore(taskKeypad, "taskKeypad", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
 
   xTaskCreatePinnedToCore(taskMoveZ, "taskMoveZ", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
   xTaskCreatePinnedToCore(taskMoveX, "taskMoveX", 10000 /* stack size */, NULL, 0 /* priority */, NULL, 0 /* core */);
@@ -2596,7 +2798,7 @@ bool saveIfChanged() {
       spindlePos == savedSpindlePos && spindlePosAvg == savedSpindlePosAvg && spindlePosSync == savedSpindlePosSync && savedSpindlePosGlobal == spindlePosGlobal && showAngle == savedShowAngle && showTacho == savedShowTacho && showBigDro == savedShowBigDro && moveStep == savedMoveStep &&
       mode == savedMode && measure == savedMeasure && x.pos == x.savedPos && x.originPos == x.savedOriginPos && x.posGlobal == x.savedPosGlobal && x.motorPos == x.savedMotorPos && x.leftStop == x.savedLeftStop && x.rightStop == x.savedRightStop && x.disabled == x.savedDisabled &&
       a1.pos == a1.savedPos && a1.originPos == a1.savedOriginPos && a1.posGlobal == a1.savedPosGlobal && a1.motorPos == a1.savedMotorPos && a1.leftStop == a1.savedLeftStop && a1.rightStop == a1.savedRightStop && a1.disabled == a1.savedDisabled &&
-      coneRatio == savedConeRatio && turnPasses == savedTurnPasses && savedAuxForward == auxForward) return false;
+      coneRatio == savedConeRatio && savedAuxForward == auxForward) return false;
 
   Preferences pref;
   pref.begin(PREF_NAMESPACE);
@@ -2645,19 +2847,7 @@ bool saveIfChanged() {
       pref.putFloat(key, coneRatio);
     }
   }
-  // Passes belong to the mode now, so it goes under the mode's own key. The wizard changes this
-  // constantly and the old global key would have every mode overwriting the others.
-  if (turnPasses != savedTurnPasses) {
-    savedTurnPasses = turnPasses;
-    int sm = settingModeOf(mode);
-    if (sm != SMODE_NONE) {
-      modeSet[sm].passes = turnPasses;
-      char key[16] = {'\0'};
-      key[0] = settingModeLetterOf(sm);
-      strcpy(key + 1, "tps");
-      pref.putLong(key, turnPasses);
-    }
-  }
+  // The pass count is not written anywhere - see MODE_PASSES_DEFAULT.
   if (auxForward != savedAuxForward) pref.putBool(PREF_AUX_FORWARD, savedAuxForward = auxForward);
   pref.end();
   nvsSaveBatches++;
@@ -3216,6 +3406,7 @@ void numpadPress(int digit) {
   if (!inNumpad) {
     numpadIndex = 0;
     numpadPointAt = -1;
+    numpadNegative = false;
     inNumpad = true;
   }
   numpadDigits[numpadIndex] = digit;
@@ -3236,6 +3427,7 @@ void numpadPoint() {
   if (!inNumpad) {
     numpadIndex = 0;
     numpadPointAt = -1;
+    numpadNegative = false;
     inNumpad = true;
   }
   // A second point is ignored rather than moved: pressing it twice by accident should not quietly
@@ -3254,6 +3446,7 @@ int numpadFracDigits() {
 void resetNumpad() {
   numpadIndex = 0;
   numpadPointAt = -1;
+  numpadNegative = false;
   // No entry is in progress any more, so the next digit starts a fresh number rather than
   // appending to the one just consumed.
   inNumpad = false;
@@ -3271,7 +3464,8 @@ long getNumpadResult() {
 // for every screen that takes a distance, so the main screen, the settings menu and their preview
 // lines cannot disagree about what a typed number means.
 long numpadToDu() {
-  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), measure != MEASURE_METRIC);
+  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), measure != MEASURE_METRIC,
+                       numpadNegative);
 }
 
 // Whether the screen in front of you takes a typed number at all. The decimal point and the
@@ -3311,13 +3505,25 @@ bool numpadAllowsPoint() {
   return !(isPassMode() && setupIndex == 1);
 }
 
-void numpadPlusMinus(bool plus) {
-  if (numpadDigits[numpadIndex - 1] < 9 && plus) {
-    numpadDigits[numpadIndex - 1]++;
-  } else if (numpadDigits[numpadIndex - 1] > 1 && !plus) {
-    numpadDigits[numpadIndex - 1]--;
+// Flip the sign of the number being typed. Either key does it, so there is nothing to remember
+// about which is which - it reads off the screen, which shows the minus as soon as it is on.
+//
+// This replaced a nudge of the last digit up or down, which never worked past 9 or below 1 and
+// read numpadDigits[-1] if the point key had started the entry - and which the plus and minus keys
+// already do properly on the pitch when no entry is under way.
+void numpadToggleSign() {
+  numpadNegative = !numpadNegative;
+}
+
+// Whether a minus means anything in the number being typed. Same idea as numpadAllowsPoint(): the
+// main screen cannot know what a number will become until the key that consumes it is pressed, so
+// it accepts a sign and the consuming key refuses it where it is meaningless. The one case it can
+// identify in advance is the pass count, which is a count of cuts and cannot run backwards.
+bool numpadAllowsSign() {
+  if (!numpadAcceptsInput()) {
+    return false;
   }
-  // TODO: implement going over 9 and below 1.
+  return !(isPassMode() && setupIndex == 1);
 }
 
 long numpadToDeciMicrons() {
@@ -3328,10 +3534,13 @@ long numpadToDeciMicrons() {
   // Threads per inch are not a distance but a count of threads, so the figure is inverted rather
   // than scaled. It still takes a point: 11.5 and 27 are both real pipe threads.
   if (measure == MEASURE_TPI) {
+    // The sign goes on the pitch, not on the thread count - inverting a negative count would give
+    // the same answer and read as a positive pitch.
     double tpi = calNumpadValue(result, numpadFracDigits());
-    return tpi > 0 ? lround(254000.0 / tpi) : 0;
+    long du = tpi > 0 ? lround(254000.0 / tpi) : 0;
+    return numpadNegative ? -du : du;
   }
-  return numpadToDu();
+  return numpadToDu(); // already signed
 }
 
 // A rotational axis measures in degrees, and its screw pitch is already stated in degrees times
@@ -3339,14 +3548,14 @@ long numpadToDeciMicrons() {
 // as a metric distance does, and must not follow the measure into inches: there are no inches in a
 // circle. Typing 90 gives 90 degrees and 0.5 gives half of one.
 long numpadToRotationDu() {
-  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), false);
+  return calNumpadToDu(getNumpadResult(), numpadFracDigits(), false, numpadNegative);
 }
 
 // A taper as the ratio it is written as - 0.0625 for NPT's 1 in 16 - typed literally now that there
 // is a point to type. It used to be entered with five implied decimals, so that same taper meant
 // keying 06250 and a bare 1 meant one hundred-thousandth rather than the 1:1 it reads as.
 float numpadToConeRatio() {
-  return (float)calNumpadValue(getNumpadResult(), numpadFracDigits());
+  return (float)calNumpadValue(getNumpadResult(), numpadFracDigits(), numpadNegative);
 }
 
 bool processNumpad(int keyCode) {
@@ -3381,7 +3590,12 @@ bool processNumpad(int keyCode) {
     numpadPress(9);
     inNumpad = true;
   } else if (inNumpad && (keyCode == B_PLUS || keyCode == B_MINUS)) {
-    numpadPlusMinus(keyCode == B_PLUS);
+    if (numpadAllowsSign()) {
+      numpadToggleSign();
+    } else {
+      // Beeping says the key was seen and the sign refused, which a dead key would not.
+      beep();
+    }
     return true;
   } else if (inNumpad) {
     inNumpad = false;
@@ -3395,8 +3609,9 @@ bool processNumpadResult(int keyCode) {
   long newRotationDu = numpadToRotationDu();
   float newConeRatio = numpadToConeRatio();
   long numpadResult = getNumpadResult();
-  // Every reading of the typed number has to happen before this: the decimal point lives in the
-  // numpad state and clearing it takes the point with it.
+  bool wasNegative = numpadNegative;
+  // Every reading of the typed number has to happen before this: the decimal point and the sign
+  // both live in the numpad state and clearing it takes them with it.
   resetNumpad();
   // Ignore numpad input unless confirmed with ON.
   if (keyCode == B_ON) {
@@ -3409,14 +3624,24 @@ bool processNumpadResult(int keyCode) {
       // Refused rather than clamped above CONE_RATIO_MAX. A ratio that large is not a cone anyone
       // turns, it is a mistyped one, and it would drive X that many times the length of every Z
       // pass. Worth stopping while it is still a number on the screen.
-      if (newConeRatio > CONE_RATIO_MAX) {
+      // Which way the cone runs is the external/internal step's job, the same way the reverse key
+      // owns the direction of a thread. A signed ratio would be a second control for it, and the
+      // two would cancel each other whenever both were set.
+      if (wasNegative) {
+        splashError("Use ext/int for way");
+      } else if (newConeRatio > CONE_RATIO_MAX) {
         splashError("Ratio too large");
       } else {
         setConeRatio(newConeRatio);
         setupIndex++;
       }
     } else {
-      if (abs(newDu) <= DUPR_MAX) {
+      // A pitch has no sign to type. Which way the thread runs is the reverse key's job, and it
+      // stays right whatever the pitch is later changed to - a minus keyed in here would be lost
+      // the moment the pitch was edited again, and would fight the reverse key in the meantime.
+      if (wasNegative) {
+        splashError("Use reverse for LH");
+      } else if (abs(newDu) <= DUPR_MAX) {
         setDupr(newDu);
       }
     }
@@ -3540,8 +3765,11 @@ bool processNumpadResult(int keyCode) {
   }
 
   if (keyCode == B_STEP) {
+    // A step is how far one press moves, not which way - the arrow you press decides that.
     if (newDu > 0) {
       moveStep = newDu;
+    } else if (wasNegative) {
+      splashError("Step cannot be -ve");
     } else {
       beep();
     }
@@ -3747,6 +3975,7 @@ long settingsReadValue(int index) {
   if (!strcmp(k, "joy")) return joystickUse ? 1 : 0;
   if (!strcmp(k, "jdb")) return joystickDebounceMs;
   if (!strcmp(k, "xdd")) return xDiameterDisplay ? 1 : 0;
+  if (!strcmp(k, "estp")) return estopTravelEnabled ? 1 : 0;
   if (!strcmp(k, "stm")) return stepTimeMs;
   if (!strcmp(k, "sdl")) return delayBetweenStepsMs;
   if (!strcmp(k, "idiv")) return indexDivisions;
@@ -3917,6 +4146,8 @@ const char* settingsWriteValue(int index, long value) {
     joystickDebounceMs = value;
   } else if (!strcmp(k, "xdd")) {
     xDiameterDisplay = value != 0;
+  } else if (!strcmp(k, "estp")) {
+    estopTravelEnabled = value != 0;
   } else if (!strcmp(k, "stm")) {
     if (value <= 0) return "Must be above 0";
     stepTimeMs = value;
@@ -4130,14 +4361,20 @@ void handleRoot() {
   webServer.send_P(200, "text/html", WEB_PAGE);
 }
 
-// Streamed rather than built as one String: 60-odd items is only a few KB, but chunking keeps peak
-// allocation flat and matches how the page itself is served.
+// Built as one String and sent in a single call, rather than streamed.
+//
+// It used to go out chunked, to keep peak allocation flat. The whole document is about 7.5kB
+// against a couple of hundred kB of free heap, so that saved little - and it cost a lot: each
+// sendContent() is three writes to the client, so the page's 87 items left as some 600 tiny TCP
+// writes. Fill lwIP's send buffer part way through that and a write is quietly dropped, which
+// truncates the body; the page's fetch then fails to parse it and shows no settings at all, with
+// nothing anywhere saying why. One write either succeeds or fails visibly.
 void handleSettingsJson() {
-  webServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  webServer.send(200, "application/json", "");
-  webServer.sendContent("{\"version\":\"H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) +
+  String out;
+  out.reserve(9000); // measured at ~7.6kB for the full table, so this should not reallocate
+  out += "{\"version\":\"H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) +
       "\",\"metric\":" + String(measure == MEASURE_METRIC ? 1 : 0) +
-      ",\"busy\":" + String(machineIsBusy() ? 1 : 0) + ",\"sections\":[");
+      ",\"busy\":" + String(machineIsBusy() ? 1 : 0) + ",\"sections\":[";
   bool firstGroup = true;
   // Directory sections first, then one group per mode. The panel keeps the mode pages behind the
   // settings button because offering the threading page while set up to face is noise; a browser
@@ -4154,13 +4391,13 @@ void handleSettingsJson() {
     for (int i = first; i < first + count; i++) if (!settingIsAction(i)) editable++;
     if (editable < 1) continue;
 
-    if (!firstGroup) webServer.sendContent(",");
+    if (!firstGroup) out += ",";
     firstGroup = false;
-    webServer.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"items\":[");
+    out += "{\"name\":\"" + jsonEscape(name) + "\",\"items\":[";
     bool firstItem = true;
     for (int i = first; i < first + count; i++) {
       if (settingIsAction(i)) continue;
-      if (!firstItem) webServer.sendContent(",");
+      if (!firstItem) out += ",";
       firstItem = false;
       // The unit is resolved here rather than on the page: a distance follows the metric/inch
       // setting, and only the firmware knows which is selected.
@@ -4186,12 +4423,12 @@ void handleSettingsJson() {
         }
         item += "]";
       }
-      webServer.sendContent(item + "}");
+      out += item + "}";
     }
-    webServer.sendContent("]}");
+    out += "]}";
   }
-  webServer.sendContent("]}");
-  webServer.sendContent("");
+  out += "]}";
+  webServer.send(200, "application/json", out);
 }
 
 void handleStatusJson() {
@@ -4415,7 +4652,9 @@ void stopWebServer() {
 }
 
 void taskWeb(void *param) {
-  while (emergencyStop == ESTOP_NONE) {
+  while (true) {
+    // Keeps serving through an emergency stop: the web page is a useful way to see what tripped,
+    // and its settings writes are refused by machineIsBusy() rather than by this task going away.
     // The radio follows the setting rather than the boot state, so it can be switched on and off
     // at the panel without a power cycle. While it is off nothing here touches WiFi at all, so a
     // machine that never enables it pays only for an idle task.
@@ -4434,7 +4673,6 @@ void taskWeb(void *param) {
     }
     taskYIELD();
   }
-  vTaskDelete(NULL);
 }
 
 // Moves to another item in the open section, wrapping inside it. delta of +-1 steps one item,
@@ -5629,6 +5867,22 @@ void updateCalDisplay() {
   printLcdSpaces(charIndex);
 }
 
+// Keys while an emergency stop holds. Only one thing is reachable: clearing it.
+//
+// Two keys at once, held rather than tapped, because the machine has just decided something was
+// wrong and the operator should have to mean it. OFF is the natural one to be holding - it is what
+// you reach for anyway - and ON is the deliberate second. Order matters: OFF has to be down first,
+// so a stop that trips while ON is already held cannot be cleared by the press that caused it.
+void processEstopKeypress(int keyCode, bool isPress) {
+  if (keyCode == B_OFF) {
+    buttonOffPressed = isPress;
+    return;
+  }
+  if (keyCode == B_ON && isPress && buttonOffPressed) {
+    clearEmergencyStop();
+  }
+}
+
 void processKeypadEvent() {
   int event = 0;
   if (serialKeycode != 0) {
@@ -5644,6 +5898,13 @@ void processKeypadEvent() {
   bitWrite(keyCode, 7, 0);
   bool isPress = bitRead(event, 7) == 1; // 1 - press, 0 - release
   keypadTimeUs = micros();
+
+  // An emergency stop swallows every key but the pair that clears it. Ahead of everything else,
+  // including the backspace handling below, so nothing can act on the machine while it holds.
+  if (emergencyStop != ESTOP_NONE) {
+    processEstopKeypress(keyCode, isPress);
+    return;
+  }
 
   // The backspace key is the decimal point on a short press and clears the number on a long one.
   // Handled here, ahead of the screen dispatch, so the main screen, the settings menu and the

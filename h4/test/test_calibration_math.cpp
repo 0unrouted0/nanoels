@@ -387,7 +387,7 @@ static void testDerivedFigures() {
 
 static void testSettingsTable() {
   group("settings table");
-  expectL("item count", SETTINGS_COUNT, 90);
+  expectL("item count", SETTINGS_COUNT, 91);
   expectL("section count", (int)SECTION_COUNT, 9);
 
   // Navigating a section is a first index and a count, which only works if a section's items
@@ -662,7 +662,7 @@ static void testSettingsTable() {
   expectB("the last item is the calibration action", settingIsAction(SETTINGS_COUNT - 1), true);
   // Preferences is what the directory opens on, so it has to be the first section.
   expectL("preferences comes first", (int)SEC_PREFS, 0);
-  expectL("preferences holds what belongs to the machine", settingSectionCount(SEC_PREFS), 11);
+  expectL("preferences holds what belongs to the machine", settingSectionCount(SEC_PREFS), 12);
 }
 
 static void testSlotting() {
@@ -1327,9 +1327,42 @@ static void testNumpadEntry() {
   group("entry that cannot mean anything");
   expectL("nothing typed", calNumpadToDu(0, 0, false), 0);
   expectL("nothing typed after a point", calNumpadToDu(0, 2, false), 0);
-  expectL("a negative cannot be typed but is refused", calNumpadToDu(-5, 0, false), 0);
+  // The sign travels beside the digits, never in them - the panel has no minus key, so a negative
+  // digit count is nonsense arriving from somewhere it should not.
+  expectL("a negative digit count is refused", calNumpadToDu(-5, 0, false), 0);
   expectL("so is a negative fraction count", calNumpadToDu(5, -1, false), 0);
   expectL("absurd precision reads as zero, not as nonsense", calNumpadToDu(5, 12, false), 0);
+
+  group("typing a negative");
+  // Plus and minus flip the sign once an entry is under way. The magnitude is untouched by it.
+  expectL("5mm negated", calNumpadToDu(5, 0, false, true), -50000);
+  expectL("and the same number positive", calNumpadToDu(5, 0, false, false), 50000);
+  expectL("the point survives the sign", calNumpadToDu(425, 2, false, true), -42500);
+  expectL("so do inches", calNumpadToDu(1, 0, true, true), -254000);
+  expectL("a leading point too", calNumpadToDu(5, 1, false, true), -5000);
+  // Nothing typed is nothing typed, whichever way the sign is set - so toggling it on an empty
+  // entry cannot conjure a value out of it.
+  expectL("a sign alone is still nothing", calNumpadToDu(0, 0, false, true), 0);
+  // The clamp applies to the magnitude, so a negative cannot escape the limit by going the other
+  // way - it would come back as a huge move in the opposite direction.
+  expectL("a negative clamps like a positive",
+      calNumpadToDu(99999999L, 0, true, true), -CAL_NUMPAD_DU_MAX);
+  // The plain value, used for the taper and for threads per inch.
+  expectF("a negative ratio", calNumpadValue(625, 4, true), -0.0625, 1e-9);
+  expectF("and a positive one", calNumpadValue(625, 4, false), 0.0625, 1e-9);
+  expectF("a sign alone leaves zero at zero", calNumpadValue(0, 0, true), 0.0, 1e-9);
+  // Signing is exactly a negation - no rounding creeps in on the way.
+  bool signIsSymmetric = true;
+  for (int frac = 0; frac <= 6; frac++) {
+    for (long d = 1; d < 9999999L; d = d * 7 + 3) {
+      for (int inch = 0; inch < 2; inch++) {
+        if (calNumpadToDu(d, frac, inch != 0, true) != -calNumpadToDu(d, frac, inch != 0, false)) {
+          signIsSymmetric = false;
+        }
+      }
+    }
+  }
+  expectB("a negative is exactly the positive negated", signIsSymmetric, true);
 
   // Eight digits of inches overflows a signed long. A wrapped value would come back as a
   // plausible move in the wrong direction, which is far worse than a refused one.
@@ -1471,6 +1504,59 @@ static void testModePredicates() {
   expectB("but it does carry the sibling marker", modeHasSiblingOf(MODE_NORMAL), true);
   expectB("as does thread, which hides TPR", modeHasSiblingOf(MODE_THREAD), true);
   expectB("XGEAR does not - it is the sibling", modeHasSiblingOf(MODE_XGEAR), false);
+
+  group("the position line stays on its own row");
+  // The bug this exists to stop: at full travel the two fields came to 22 characters on a 20
+  // character row, and on an HD44780 the two that did not fit landed on the first columns of the
+  // pitch line rather than falling off the end. The tail of the X position - its unit glyph and a
+  // space - wrote itself over the "P" of "Pitch", every time an axis moved.
+  {
+    LcdLine dro;
+    // Z at -300.000mm and X shown as a -200.000mm diameter: the widest either field can be.
+    lcdLineClear(&dro);
+    lcdLineDroField(&dro, 'Z', -3000000, false, true, true);
+    lcdLineDroField(&dro, LCD_GLYPH_DIA, -2000000, false, true, true);
+    expectL("full travel on both axes fits the row exactly", dro.len, 20);
+    expectB("and nothing was dropped to make it fit", dro.truncated, false);
+    expectB("each axis keeps its own ten columns", dro.buf[LCD_DRO_FIELD] == LCD_GLYPH_DIA, true);
+
+    // A third of a micron more and the field has to give something up - but it gives up its own
+    // last column, not the next line's first.
+    lcdLineClear(&dro);
+    lcdLineDroField(&dro, 'Z', -30001234, false, true, true);
+    expectL("an impossible position still fits its field", dro.len, LCD_DRO_FIELD);
+    expectB("and says it had to clip", dro.truncated, true);
+
+    // Short values pad rather than shuffle, so the X field never moves under your eye.
+    lcdLineClear(&dro);
+    lcdLineDroField(&dro, 'Z', 0, false, true, true);
+    expectL("a zero position still fills its field", dro.len, LCD_DRO_FIELD);
+    lcdLineDroField(&dro, 'X', 0, false, true, true);
+    expectL("two of them fill the row", dro.len, 20);
+
+    // A disabled axis leaves its columns blank instead of moving the other one across.
+    lcdLineClear(&dro);
+    lcdLineDroField(&dro, 'Z', 123456, false, true, false);
+    expectL("a hidden axis still holds its place", dro.len, LCD_DRO_FIELD);
+    expectB("with nothing in it", dro.buf[0] == ' ', true);
+
+    // Whatever the inputs, the row cannot reach the line below it.
+    bool alwaysFits = true;
+    const long probes[] = {0, 1, -1, 5, -12345, 999999, -3000000, 2000000, -29999999, 30000000};
+    for (int a = 0; a < 10; a++) {
+      for (int b = 0; b < 10; b++) {
+        for (int metricProbe = 0; metricProbe < 2; metricProbe++) {
+          for (int rot = 0; rot < 2; rot++) {
+            lcdLineClear(&dro);
+            lcdLineDroField(&dro, 'Z', probes[a], rot != 0, metricProbe != 0, true);
+            lcdLineDroField(&dro, 'X', probes[b], rot != 0, metricProbe != 0, true);
+            if (dro.len != 20) alwaysFits = false;
+          }
+        }
+      }
+    }
+    expectB("400 combinations of position, unit and axis kind all fit", alwaysFits, true);
+  }
 
   group("keys that carry several screens");
   expectL("the two gearboxes share a key", modeGroupOf(MODE_XGEAR), modeGroupOf(MODE_NORMAL));
@@ -1858,6 +1944,24 @@ static void testModeSettings() {
   expectL("facing keeps none", modeSettingRead(&face, "spp"), 0);
   expectL("threading keeps its pass count", modeSettingRead(&thread, "tps"), 6);
   expectL("facing keeps its own", modeSettingRead(&face, "tps"), 3);
+
+  // "tps" is the count a mode STARTS from. Setting it moves the working count too, so a default
+  // dialled in from the menu takes effect now rather than at the next restart.
+  expectL("setting the default sets the count in use", thread.passes, 6);
+  expectL("and the other mode is untouched", face.passes, 3);
+  // The working count moves on its own without disturbing the default, which is what lets a
+  // restart come back to something deliberate rather than to whatever the last job needed.
+  thread.passes = 17;
+  expectL("the count in use can be changed alone", thread.passes, 17);
+  expectL("the stored default does not follow it", modeSettingRead(&thread, "tps"), 6);
+  // Which is the whole point: reseeding is what a restart does.
+  thread.passes = thread.defaultPasses;
+  expectL("a restart returns to the default", thread.passes, 6);
+  // The ceiling is shared with the numpad, and a count of zero would divide by itself.
+  expectB("zero passes is refused", modeSettingWrite(&thread, "tps", 0) != NULL, true);
+  expectB("above the ceiling is refused",
+      modeSettingWrite(&thread, "tps", MODE_PASSES_MAX + 1) != NULL, true);
+  expectL("a refused write leaves the default alone", modeSettingRead(&thread, "tps"), 6);
 
   // Every mode-scoped row in the table must be a key these functions actually handle, or the
   // menu would show an item that always reads zero and refuses every write.

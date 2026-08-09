@@ -120,6 +120,11 @@ const SettingDesc SETTINGS[] = {
   // as one global value each. They belong to the operation rather than to the machine and have
   // moved to the per-mode pages further down.
   {"X readout",           SETTING_GLOBAL_BOOL, "xdd",  SEC_PREFS, SAX_NONE, SMODE_NONE, "diameter", "radius", 0},
+  // Whether a commanded move longer than the axis's max travel trips the emergency stop. It is a
+  // guard against a move that would run off the end of the machine, and it is only as good as the
+  // max travel figures it compares against - so it can be switched off on a machine whose travels
+  // have not been measured, where it fires on perfectly good moves instead.
+  {"Travel E-stop",       SETTING_GLOBAL_BOOL, "estp", SEC_PREFS, SAX_NONE, SMODE_NONE, "on", "off", 0},
   {"Retract distance",    SETTING_GLOBAL_DU,   "rtd",  SEC_PREFS, SAX_NONE, SMODE_NONE, 0, 0, 0},
   {"Manual step time",    SETTING_GLOBAL_NUM,  "stm",  SEC_PREFS, SAX_NONE, SMODE_NONE, 0, 0, "ms"},
   {"Step rest",           SETTING_GLOBAL_NUM,  "sdl",  SEC_PREFS, SAX_NONE, SMODE_NONE, 0, 0, "ms"},
@@ -232,21 +237,27 @@ const SettingDesc SETTINGS[] = {
   // the machine is set up to face.
   //
   // Each mode's items must stay contiguous, for the same reason a section's do. Several modes
-  // share a suffix - every one of these has "Passes" under "tps" - and the mode letter in front
-  // is what keeps the stored values apart.
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_TURN, 0, 0, "passes"},
+  // share a suffix - every one of these has "Default passes" under "tps" - and the mode letter in
+  // front is what keeps the stored values apart.
+  //
+  // Note what "tps" stores: the count a mode STARTS from, not the count it is using. The working
+  // count belongs to the job in front of you - how many cuts it takes to reach depth follows from
+  // the material, the tool and how hard you are pushing - so it is never written to flash, and a
+  // restart brings every mode back to its default. Within a session each mode keeps its own, so
+  // stepping over to face something and back does not lose the count you dialled in for threading.
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_TURN, 0, 0, "passes"},
   {"Spring passes",      SETTING_GLOBAL_NUM,  "spp",  SEC_MODE, SAX_NONE, SMODE_TURN, 0, 0, "passes"},
   {"Clearance",          SETTING_GLOBAL_DU,   "safe", SEC_MODE, SAX_NONE, SMODE_TURN, 0, 0, 0},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_FACE, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_FACE, 0, 0, "passes"},
   {"Spring passes",      SETTING_GLOBAL_NUM,  "spp",  SEC_MODE, SAX_NONE, SMODE_FACE, 0, 0, "passes"},
   {"Clearance",          SETTING_GLOBAL_DU,   "safe", SEC_MODE, SAX_NONE, SMODE_FACE, 0, 0, 0},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_CUT, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_CUT, 0, 0, "passes"},
   {"Peck depth",         SETTING_GLOBAL_DU,   "pck",  SEC_MODE, SAX_NONE, SMODE_CUT, 0, 0, 0},
   {"Clearance",          SETTING_GLOBAL_DU,   "safe", SEC_MODE, SAX_NONE, SMODE_CUT, 0, 0, 0},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_THREAD, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_THREAD, 0, 0, "passes"},
   {"Spring passes",      SETTING_GLOBAL_NUM,  "spp",  SEC_MODE, SAX_NONE, SMODE_THREAD, 0, 0, "passes"},
   {"Flank infeed",       SETTING_GLOBAL_BOOL, "fli",  SEC_MODE, SAX_NONE, SMODE_THREAD, "on", "off", 0},
   {"Clearance",          SETTING_GLOBAL_DU,   "safe", SEC_MODE, SAX_NONE, SMODE_THREAD, 0, 0, 0},
@@ -254,15 +265,15 @@ const SettingDesc SETTINGS[] = {
   // entry on the page now, so the page can hold the threading settings as well.
   {"Thread database",    SETTING_ACTION,      "thr",  SEC_MODE, SAX_NONE, SMODE_THREAD, 0, 0, 0},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_TPR, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_TPR, 0, 0, "passes"},
   {"Spring passes",      SETTING_GLOBAL_NUM,  "spp",  SEC_MODE, SAX_NONE, SMODE_TPR, 0, 0, "passes"},
   {"Flank infeed",       SETTING_GLOBAL_BOOL, "fli",  SEC_MODE, SAX_NONE, SMODE_TPR, "on", "off", 0},
   {"Clearance",          SETTING_GLOBAL_DU,   "safe", SEC_MODE, SAX_NONE, SMODE_TPR, 0, 0, 0},
   {"Thread database",    SETTING_ACTION,      "thr",  SEC_MODE, SAX_NONE, SMODE_TPR, 0, 0, 0},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_ELLIPSE, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_ELLIPSE, 0, 0, "passes"},
 
-  {"Passes",             SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_SLOT, 0, 0, "passes"},
+  {"Default passes",     SETTING_GLOBAL_NUM,  "tps",  SEC_MODE, SAX_NONE, SMODE_SLOT, 0, 0, "passes"},
   {"Left reduction",     SETTING_GLOBAL_DU,   "slt",  SEC_MODE, SAX_NONE, SMODE_SLOT, 0, 0, 0},
 
   // -- Calibration --------------------------------------------------------
