@@ -157,6 +157,11 @@ const SettingDesc SETTINGS[] = {
   {"Max speed",          SETTING_AXIS_NUM,  "spd",  SEC_Z, SAX_Z, SMODE_NONE, 0, 0, "steps/s"},
   {"Acceleration",       SETTING_AXIS_NUM,  "acc",  SEC_Z, SAX_Z, SMODE_NONE, 0, 0, "st/s2"},
   {"Max travel",         SETTING_AXIS_NUM,  "mtr",  SEC_Z, SAX_Z, SMODE_NONE, 0, 0, "mm"},
+  // Whether the driver stays energised between moves. "No" lets an open-loop motor cool, and costs
+  // position for it: de-energising frees the rotor to be pulled to the nearest detent by the load,
+  // and energising snaps it to wherever the driver's phase counter restarts. That is a small fixed
+  // error at each end of every move - invisible over a long move, a real fraction of a short one,
+  // and cumulative over a lot of jogging. Say yes on any axis whose position you care about.
   {"Hold when idle",     SETTING_AXIS_BOOL, "rst",  SEC_Z, SAX_Z, SMODE_NONE, "no", "yes", 0},
 
   // -- X axis -------------------------------------------------------------

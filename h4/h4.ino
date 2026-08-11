@@ -45,6 +45,10 @@ int ENCODER_STEPS_INT = ENCODER_PPR * ENCODER_COUNTS_PER_PULSE;
 // detects that and corrects for it, so the counter is never cleared from software.
 const int PCNT_LIM = 31000;
 const long DUPR_MAX = 254000; // No more than 1 inch pitch
+// Largest backlash that is a backlash rather than a mistyped one. 5mm is far beyond any lathe worth
+// compensating; the value it guards against is the decimal point being out by two, which turns
+// 0.15mm into 15mm of travel the axis has to wind out before the tool moves.
+const long BACKLASH_DU_MAX = 50000; // 5mm
 const int32_t STARTS_MAX = 124; // No more than 124-start thread
 const long PASSES_MAX = MODE_PASSES_MAX; // No more turn or face passes than this
 // A taper of 100 is 100mm of X for every 1mm of Z, so nearly a facing cut. Anything past it is a
@@ -258,7 +262,9 @@ bool isOn = false;
 bool nextIsOn; // isOn value that should be applied asap
 bool nextIsOnFlag; // whether nextIsOn requires attention
 unsigned long resetMillis = 0;
-int emergencyStop = 0;
+// Polled by every task on both cores and by loop(), and now cleared at runtime rather than only
+// ever set - so the compiler must not hoist a read of it out of any of those spin loops.
+volatile int emergencyStop = 0;
 
 // Which pattern the buzzer has been asked for, or BEEP_NONE. Written from any core - including
 // the motion loop, which must not sit in tone() - and consumed by taskDisplay, which owns the
@@ -1683,14 +1689,49 @@ void setAsyncTimerEnable(bool value) {
   }
 }
 
+// Whether the buzzer has already been hushed for the stop currently holding, so it is silenced once
+// on arrival rather than on every pass.
+bool estopBuzzerSilenced = false;
+
+// The buzzer lives in taskDisplay because playing a multi-step pattern means coming back to it over
+// and over, which the motion loop on core 1 cannot afford to do. Split out so the emergency stop
+// screen can go on servicing it: it is the only task that owns the buzzer, and if it stops calling
+// this, whatever tone was sounding stays on.
+void serviceBeeper(unsigned long nowMs) {
+  if (beepRequest != BEEP_NONE) {
+    beeperStart(&beeper, beepRequest, nowMs);
+    beepRequest = BEEP_NONE;
+  }
+  int beepFreq = 0;
+  if (beeperTick(&beeper, nowMs, &beepFreq)) {
+    if (beepFreq > 0) {
+      tone(BUZZ, beepFreq);
+    } else {
+      noTone(BUZZ);
+    }
+  }
+}
+
 void taskDisplay(void *param) {
   unsigned long lastLcdMs = 0;
   while (true) {
     if (emergencyStop != ESTOP_NONE) {
       updateEstopDisplay();
+      // The buzzer is owned by this task, and skipping past it here left whatever tone happened to
+      // be sounding when the stop tripped switched on for as long as the stop lasted - a stuck
+      // note, and no way to hear anything else. Silence it once on arrival, then go on servicing
+      // patterns so the acknowledgement for clearing the stop can still be heard.
+      if (!estopBuzzerSilenced) {
+        estopBuzzerSilenced = true;
+        beeperReset(&beeper);
+        beepRequest = BEEP_NONE;
+        noTone(BUZZ);
+      }
+      serviceBeeper(millis());
       taskYIELD();
       continue;
     }
+    estopBuzzerSilenced = false;
     // Rate-limited rather than free-running: see LCD_MIN_UPDATE_MS. The per-line hashes already
     // skip unchanged content, but without this a value that changes every loop gets rewritten
     // faster than it can be read or the display can settle.
@@ -1707,20 +1748,7 @@ void taskDisplay(void *param) {
         saveTime = now;
       }
     }
-    // The buzzer lives here because playing a multi-step pattern means coming back to it over and
-    // over, which the motion loop on core 1 cannot afford to do.
-    if (beepRequest != BEEP_NONE) {
-      beeperStart(&beeper, beepRequest, nowMs);
-      beepRequest = BEEP_NONE;
-    }
-    int beepFreq = 0;
-    if (beeperTick(&beeper, nowMs, &beepFreq)) {
-      if (beepFreq > 0) {
-        tone(BUZZ, beepFreq);
-      } else {
-        noTone(BUZZ);
-      }
-    }
+    serviceBeeper(nowMs);
     // A commanded move longer than the whole travel of the axis. estopSteps of 0 or less means no
     // usable max travel is configured, and comparing against it would trip on every move rather
     // than on a runaway - so an unconfigured axis is not guarded rather than being unusable.
@@ -1783,14 +1811,21 @@ void taskKeypad(void *param) {
   }
 }
 
+// Both waits below give up on an emergency stop as well as on the movement finishing.
+//
+// Nothing drains pendingPos while a stop holds - loop() returns before moveAxis ever runs - so a
+// task waiting here would spin inside the stop for as long as it lasted, never reaching the check
+// at the top of its own loop. Worse, clearing the stop zeroes pendingPos, which released the wait
+// and let the task carry straight on with the move it had been part way through, as though nothing
+// had happened. Every caller has to treat a return as "stopped, for one reason or the other".
 void waitForPendingPosNear0(Axis* a) {
-  while (abs(a->pendingPos) > a->motorSteps / 3) {
+  while (abs(a->pendingPos) > a->motorSteps / 3 && emergencyStop == ESTOP_NONE) {
     taskYIELD();
   }
 }
 
 void waitForPendingPos0(Axis* a) {
-  while (a->pendingPos != 0) {
+  while (a->pendingPos != 0 && emergencyStop == ESTOP_NONE) {
     taskYIELD();
   }
 }
@@ -1808,16 +1843,51 @@ long getStepMaxSpeed(Axis* a) {
   return isContinuousStep() ? a->speedManualMove : min(long(a->speedManualMove), abs(getMoveStepForAxis(a)) * 1000 / stepTimeMs);
 }
 
-void waitForStep(Axis* a) {
+// Waits for a manual step to land, giving up early if the key driving it comes up.
+//
+// A commanded move can be far longer than the step that was asked for: reversing direction adds the
+// whole backlash figure to it, and until that is wound out the tool has not moved at all. The
+// release used to be noticed only between moves, so a tap could commit the axis to winding out the
+// entire backlash first - which on a mis-entered figure is millimetres of travel that appear to
+// ignore the key being let go. keyDown of NULL means nothing to watch, as when a handwheel is
+// driving rather than a key.
+void waitForStep(Axis* a, volatile bool* keyDown) {
   if (isContinuousStep()) {
     // Move continuously for default step.
-    waitForPendingPosNear0(a);
+    while (abs(a->pendingPos) > a->motorSteps / 3 && emergencyStop == ESTOP_NONE &&
+           (keyDown == NULL || *keyDown)) {
+      taskYIELD();
+    }
   } else {
     // Move with tiny pauses allowing to stop precisely.
     a->continuous = false;
-    waitForPendingPos0(a);
+    while (a->pendingPos != 0 && emergencyStop == ESTOP_NONE && (keyDown == NULL || *keyDown)) {
+      taskYIELD();
+    }
     DELAY(delayBetweenStepsMs);
   }
+}
+
+// Shortens an outstanding move to whatever is still needed to come to a controlled stop, for when a
+// jog key is released part way through one. Cancelling it outright would drop the axis from full
+// speed to a standstill in a single step, which is its own way of losing position; leaving it alone
+// carries on to a target the operator has stopped asking for.
+//
+// Stopping mid-backlash is honest rather than a problem: motorPos and pos both stay true to where
+// the motor and the tool actually are, and the next move in either direction accounts for the part
+// of the backlash already wound out.
+void stepToStop(Axis* a) {
+  if (xSemaphoreTake(a->mutex, 10) != pdTRUE) {
+    return;
+  }
+  long ramp = a->decelerateSteps;
+  if (a->pendingPos > ramp) {
+    a->pendingPos = ramp;
+  } else if (a->pendingPos < -ramp) {
+    a->pendingPos = -ramp;
+  }
+  a->continuous = false;
+  xSemaphoreGive(a->mutex);
 }
 
 int getAndResetPulses(Axis* a) {
@@ -1936,7 +2006,7 @@ void taskMoveZ(void *param) {
           resting = true;
           DELAY(200);
         }
-      } while (left ? buttonLeftPressed : buttonRightPressed);
+      } while (emergencyStop == ESTOP_NONE && (left ? buttonLeftPressed : buttonRightPressed));
     } else {
       z.speedMax = getStepMaxSpeed(&z);
       int delta = 0;
@@ -1959,9 +2029,10 @@ void taskMoveZ(void *param) {
         }
         z.speedMax = getStepMaxSpeed(&z);
         stepToContinuous(&z, posCopy + delta);
-        waitForStep(&z);
-      } while (delta != 0 && (left ? buttonLeftPressed : buttonRightPressed));
+        waitForStep(&z, left ? &buttonLeftPressed : &buttonRightPressed);
+      } while (delta != 0 && emergencyStop == ESTOP_NONE && (left ? buttonLeftPressed : buttonRightPressed));
       z.continuous = false;
+      stepToStop(&z); // the key may have come up mid-move - see stepToStop()
       waitForPendingPos0(&z);
       // The stop clamped the move to nothing, but the key is still down. Sit here until it comes
       // up: letting the outer loop re-enter instead meant taking and dropping the driver's enable
@@ -1971,7 +2042,12 @@ void taskMoveZ(void *param) {
              (left ? buttonLeftPressed : buttonRightPressed)) {
         taskYIELD();
       }
-      if (isOn && mode == MODE_CONE) {
+      // Skipped under a stop: this is end-of-move bookkeeping for a move that did not finish.
+      // Re-marking the origin there would move the datum while the operator is looking at a stopped
+      // machine wondering where it is, and restarting the async timer would undo the stop.
+      if (emergencyStop != ESTOP_NONE) {
+        // nothing to tidy - the move was abandoned, not completed
+      } else if (isOn && mode == MODE_CONE) {
         if (xSemaphoreTake(motionMutex, 100) != pdTRUE) {
           setEmergencyStop(ESTOP_MARK_ORIGIN);
         } else {
@@ -2049,17 +2125,18 @@ void taskMoveX(void *param) {
         delta = x.rightStop - posCopy;
       }
       stepToContinuous(&x, posCopy + delta);
-      waitForStep(&x);
+      { volatile bool* k = up ? &buttonUpPressed : &buttonDownPressed; waitForStep(&x, *k ? k : NULL); }
       pulseDelta = getAndResetPulses(&x);
-    } while (delta != 0 && (pulseDelta != 0 || (up ? buttonUpPressed : buttonDownPressed)));
+    } while (delta != 0 && emergencyStop == ESTOP_NONE && (pulseDelta != 0 || (up ? buttonUpPressed : buttonDownPressed)));
     x.continuous = false;
+    stepToStop(&x); // the key may have come up mid-move - see stepToStop()
     waitForPendingPos0(&x);
     // Standing on a stop with the key still down - see taskMoveZ.
     while (delta == 0 && emergencyStop == ESTOP_NONE &&
            (up ? buttonUpPressed : buttonDownPressed)) {
       taskYIELD();
     }
-    if (isOn && mode == MODE_CONE) {
+    if (isOn && mode == MODE_CONE && emergencyStop == ESTOP_NONE) { // see taskMoveZ
       if (xSemaphoreTake(motionMutex, 100) != pdTRUE) {
         setEmergencyStop(ESTOP_MARK_ORIGIN);
       } else {
@@ -2119,9 +2196,10 @@ void taskMoveA1(void *param) {
         delta = a1.rightStop - posCopy;
       }
       stepToContinuous(&a1, posCopy + delta);
-      waitForStep(&a1);
-    } while (delta != 0 && (plus ? buttonTurnPressed : buttonGearsPressed));
+      waitForStep(&a1, plus ? &buttonTurnPressed : &buttonGearsPressed);
+    } while (delta != 0 && emergencyStop == ESTOP_NONE && (plus ? buttonTurnPressed : buttonGearsPressed));
     a1.continuous = false;
+    stepToStop(&a1); // the key may have come up mid-move - see stepToStop()
     waitForPendingPos0(&a1);
     // Standing on a stop with the key still down - see taskMoveZ.
     while (delta == 0 && emergencyStop == ESTOP_NONE &&
@@ -2129,7 +2207,7 @@ void taskMoveA1(void *param) {
       taskYIELD();
     }
     // Restore async direction.
-    if (isOn && mode == MODE_A1) updateAsyncTimerSettings();
+    if (isOn && mode == MODE_A1 && emergencyStop == ESTOP_NONE) updateAsyncTimerSettings(); // see taskMoveZ
     a1.movingManually = false;
     a1.speedMax = LONG_MAX;
     enableUntilMs = millis() + MANUAL_ENABLE_HOLD_MS; // see taskMoveZ
@@ -2457,7 +2535,25 @@ void clearEmergencyStop() {
   setupIndex = 0;
   opIndex = 0;
   opSubIndex = 0;
+  // Drop every held key. While the stop held, processEstopKeypress() saw only OFF and ON, so the
+  // release of anything else went unheard and its flag is still down. Without this, clearing a stop
+  // that tripped mid-jog hands the movement tasks a direction key they think is still pressed, and
+  // the axis sets off again on its own the moment the machine comes back.
+  buttonLeftPressed = false;
+  buttonRightPressed = false;
+  buttonUpPressed = false;
+  buttonDownPressed = false;
+  buttonGearsPressed = false;
+  buttonTurnPressed = false;
+  buttonAPressed = false;
+  buttonSettingsPressed = false;
+  buttonBackspacePressed = false;
   buttonOffPressed = false;
+  // The OFF key is still physically down - it is half of the combination that got us here - and its
+  // release is about to reach buttonOffRelease() through the normal path. That compares against
+  // resetMillis, which is stale by however long the stop lasted, and would read as a three-second
+  // hold and wipe the stops and settings. Start its clock now so the release reads as a tap.
+  resetMillis = millis();
   emergencyStop = ESTOP_NONE;
   // The async modes drive from the timer rather than from loop(), so it has to come back or they
   // would be silently dead. isOn is false, so the handler returns immediately until ON is pressed.
@@ -4015,6 +4111,12 @@ const char* settingsWriteValue(int index, long value) {
       a->invertStepper = value != 0;
       a->directionInitialized = false;
     } else if (!strcmp(k, "bla")) {
+      // The only axis figure that had no check at all, and the one where a slip is worst: it is
+      // added to every move that reverses direction, so an entry a hundred times too large commits
+      // the axis to winding out millimetres before the tool moves at all - which reads as the axis
+      // running away and refusing to stop. Real backlash on a lathe is tenths of a millimetre.
+      if (value < 0) return "Cannot be negative";
+      if (value > BACKLASH_DU_MAX) return "Too big, check units";
       a->backlashDu = value;
     } else if (!strcmp(k, "scr")) {
       if (value <= 0) return "Must be above 0";
@@ -6211,8 +6313,12 @@ void moveAxis(Axis* a) {
   }
   // Most of the time a step isn't needed.
   if (a->pendingPos == 0) {
-    // A keypress-issued move has landed, so let the driver rest again if it wants to.
-    if (a->autoRelease) {
+    // A keypress-issued move has landed, so let the driver rest again if it wants to - but not the
+    // instant the last pulse goes out, which is what this used to do. The driver still has to act on
+    // that pulse, and de-energising an open-loop motor while the rotor is still settling lets the
+    // load pull it back to the nearest detent. That is a fixed error at the end of every move: lost
+    // in the noise over 10mm, and a large fraction of a 1mm one.
+    if (a->autoRelease && micros() - a->stepStartUs > MANUAL_ENABLE_HOLD_MS * 1000UL) {
       a->autoRelease = false;
       stepperEnable(a, false);
     }
@@ -6734,8 +6840,13 @@ void setFeedRate(const String& command) {
   gcodeFeedDuPerSec = round(feed * (gcodeInch ? 254000 : 10000) / 60.0);
 }
 
+// Gives up if the program is switched off or a stop trips, as well as when the move lands - see
+// waitForPendingPos0(). Without the isOn test the keypad's OFF, M0/M2/M30 and the serial stop all
+// had no effect until the move in progress finished on its own.
 void gcodeWaitEpsilon(int epsilon) {
-  while (abs(x.pendingPos) > epsilon || abs(z.pendingPos) > epsilon || abs(a1.pendingPos) > epsilon || (SPINDLE_PAUSES_GCODE && getApproxRpm() < GCODE_MIN_RPM)) {
+  while (isOn && emergencyStop == ESTOP_NONE &&
+         (abs(x.pendingPos) > epsilon || abs(z.pendingPos) > epsilon || abs(a1.pendingPos) > epsilon ||
+          (SPINDLE_PAUSES_GCODE && getApproxRpm() < GCODE_MIN_RPM))) {
     taskYIELD();
   }
 }
