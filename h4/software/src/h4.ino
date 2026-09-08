@@ -530,91 +530,91 @@ long opDupr = 0; // dupr that the multi-pass operation started with
 
 const int customCharMmCode = 0;
 byte customCharMm[] = {
-  B11010,
-  B10101,
-  B10101,
-  B00000,
-  B11010,
-  B10101,
-  B10101,
-  B00000
+  0b11010,
+  0b10101,
+  0b10101,
+  0b00000,
+  0b11010,
+  0b10101,
+  0b10101,
+  0b00000
 };
 const int customCharLimUpCode = 1;
 byte customCharLimUp[] = {
-  B11111,
-  B00100,
-  B01110,
-  B10101,
-  B00100,
-  B00100,
-  B00000,
-  B00000
+  0b11111,
+  0b00100,
+  0b01110,
+  0b10101,
+  0b00100,
+  0b00100,
+  0b00000,
+  0b00000
 };
 const int customCharLimDownCode = 2;
 byte customCharLimDown[] = {
-  B00000,
-  B00100,
-  B00100,
-  B10101,
-  B01110,
-  B00100,
-  B11111,
-  B00000
+  0b00000,
+  0b00100,
+  0b00100,
+  0b10101,
+  0b01110,
+  0b00100,
+  0b11111,
+  0b00000
 };
 const int customCharLimLeftCode = 3;
 byte customCharLimLeft[] = {
-  B10000,
-  B10010,
-  B10100,
-  B11111,
-  B10100,
-  B10010,
-  B10000,
-  B00000
+  0b10000,
+  0b10010,
+  0b10100,
+  0b11111,
+  0b10100,
+  0b10010,
+  0b10000,
+  0b00000
 };
 const int customCharLimRightCode = 4;
 byte customCharLimRight[] = {
-  B00001,
-  B01001,
-  B00101,
-  B11111,
-  B00101,
-  B01001,
-  B00001,
-  B00000
+  0b00001,
+  0b01001,
+  0b00101,
+  0b11111,
+  0b00101,
+  0b01001,
+  0b00001,
+  0b00000
 };
 const int customCharLimUpDownCode = 5;
 byte customCharLimUpDown[] = {
-  B11111,
-  B00100,
-  B01110,
-  B00000,
-  B01110,
-  B00100,
-  B11111,
-  B00000
+  0b11111,
+  0b00100,
+  0b01110,
+  0b00000,
+  0b01110,
+  0b00100,
+  0b11111,
+  0b00000
 };
 const int customCharLimLeftRightCode = 6;
 byte customCharLimLeftRight[] = {
-  B00000,
-  B10001,
-  B10001,
-  B11111,
-  B10001,
-  B10001,
-  B00000,
-  B00000
+  0b00000,
+  0b10001,
+  0b10001,
+  0b11111,
+  0b10001,
+  0b10001,
+  0b00000,
+  0b00000
 };
 const int customCharDiaCode = 7;
 byte customCharDia[] = {
-  B00001,
-  B01110,
-  B10011,
-  B10101,
-  B11001,
-  B01110,
-  B10000,
-  B00000
+  0b00001,
+  0b01110,
+  0b10011,
+  0b10101,
+  0b11001,
+  0b01110,
+  0b10000,
+  0b00000
 };
 
 // Settings menu and thread database screens, both opened with the settings button.
@@ -1134,17 +1134,17 @@ long numpadToDu();
 
 // Big 3x2-cell digit font for the large DRO screen. Since the LCD only has 8 custom character
 // slots, shared with the normal screen's icons, the character set is swapped when (de)entering it.
-byte bigCharLT[] = {B00111, B01111, B11111, B11111, B11111, B11111, B11111, B11111};
-byte bigCharUB[] = {B11111, B11111, B11111, B00000, B00000, B00000, B00000, B00000};
-byte bigCharRT[] = {B11100, B11110, B11111, B11111, B11111, B11111, B11111, B11111};
-byte bigCharLL[] = {B11111, B11111, B11111, B11111, B11111, B11111, B01111, B00111};
-byte bigCharLB[] = {B00000, B00000, B00000, B00000, B00000, B11111, B11111, B11111};
-byte bigCharLR[] = {B11111, B11111, B11111, B11111, B11111, B11111, B11110, B11100};
+byte bigCharLT[] = {0b00111, 0b01111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111};
+byte bigCharUB[] = {0b11111, 0b11111, 0b11111, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000};
+byte bigCharRT[] = {0b11100, 0b11110, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111};
+byte bigCharLL[] = {0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b01111, 0b00111};
+byte bigCharLB[] = {0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111, 0b11111, 0b11111};
+byte bigCharLR[] = {0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11110, 0b11100};
 // Middle bar is 1px here and 2px in bigCharLMB below, so the crossbar totals 3px across the
 // cell boundary - the same weight as the top and bottom bars. It used to be 2px+2px, which made
 // the crossbar visibly fatter than every other stroke in the digit.
-byte bigCharUMB[] = {B11111, B11111, B11111, B00000, B00000, B00000, B00000, B11111};
-byte bigCharLMB[] = {B11111, B11111, B00000, B00000, B00000, B11111, B11111, B11111};
+byte bigCharUMB[] = {0b11111, 0b11111, 0b11111, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111};
+byte bigCharLMB[] = {0b11111, 0b11111, 0b00000, 0b00000, 0b00000, 0b11111, 0b11111, 0b11111};
 
 // Cells of each digit: 3 top row cells, then 3 bottom row cells. 32 = space, 255 = full block.
 const byte BIG_DIGIT_CELLS[10][6] = {
