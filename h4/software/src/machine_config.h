@@ -43,8 +43,10 @@
 #define ENC_B 15
 
 #define BUZZ 4 // Buzzer
-#define SCL 5  // I2C clock, to the keypad controller
-#define SDA 6  // I2C data
+
+// First I2C bus (I2C_keys), keypad controller only.
+#define KEYS_SCL 5 // I2C clock
+#define KEYS_SDA 6 // I2C data
 
 // Auxiliary terminals. Used by the A1 axis, the handwheels or the joystick - whichever of those
 // is enabled below. They cannot be shared.
@@ -55,6 +57,29 @@
 #define A21 12
 #define A22 13
 #define A23 14
+
+// Character LCD size. Same for both wiring options below.
+#define LCD_COLUMNS 20
+#define LCD_ROWS 4
+
+// How the character LCD is wired. Uncomment for a display on a PCF8574 I2C backpack, leave
+// commented for the stock 8-bit parallel display.
+//
+// The backpack talks on a second I2C bus of its own, on the two pins the parallel display would
+// use for d6/d7. It has to be a separate bus: the keypad controller is a fixed I2C slave on the
+// first one and the backpack expander needs the bus clocked at its own pace.
+//#define DISPLAY_I2C_EXPANDER
+
+#ifdef DISPLAY_I2C_EXPANDER
+
+// Second I2C bus (I2C_disp), display only.
+#define DISP_SDA 2
+#define DISP_SCL 1
+// Address of the PCF8574 on the backpack. 0x27 on most boards, 0x3F on those built around the
+// PCF8574A. If the screen stays blank, this is the first thing to check.
+#define DISP_I2C_ADDR 0x27
+
+#else
 
 // Character LCD in 8-bit parallel mode: rs, enable, then d0-d7.
 #define LCD_RS 21
@@ -67,8 +92,8 @@
 #define LCD_D5 42
 #define LCD_D6 2
 #define LCD_D7 1
-#define LCD_COLUMNS 20
-#define LCD_ROWS 4
+
+#endif
 
 // ---------------------------------------------------------------------------
 // Spindle encoder

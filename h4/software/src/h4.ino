@@ -188,8 +188,20 @@ const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode
 
 #include <SPI.h>
 #include <Wire.h>
+
+// The keypad controller and the display each get an I2C bus of their own: the keypad is a fixed
+// slave that must stay reachable, and the display backpack is chatty enough to be worth keeping
+// off that bus.
+TwoWire I2C_keys = TwoWire(0);
+
+#ifdef DISPLAY_I2C_EXPANDER
+TwoWire I2C_disp = TwoWire(1);
+#include "LiquidCrystal_I2C_pt.h"
+LiquidCrystal_I2C lcd(DISP_I2C_ADDR, LCD_COLUMNS, LCD_ROWS, &I2C_disp);
+#else
 #include <LiquidCrystal.h>
 LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D0, LCD_D1, LCD_D2, LCD_D3, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+#endif
 #define LCD_HASH_INITIAL -3845709 // Random number that's unlikely to naturally occur as an actual hash
 long lcdHashLine0 = LCD_HASH_INITIAL;
 long lcdHashLine1 = LCD_HASH_INITIAL;
@@ -2849,14 +2861,21 @@ void setup() {
   }
   pref.end();
 
+#ifdef DISPLAY_I2C_EXPANDER
+  // init() begins I2C_disp, so the pins have to be set first. The backlight is off after a reset.
+  I2C_disp.setPins(DISP_SDA, DISP_SCL);
+  lcd.init();
+  lcd.backlight();
+#else
   lcd.begin(LCD_COLUMNS, LCD_ROWS);
+#endif
   lcdLoadNormalChars();
 
   Serial.begin(115200);
 
-  if (!Wire.begin(SDA, SCL)) {
+  if (!I2C_keys.begin(KEYS_SDA, KEYS_SCL)) {
     Serial.println("I2C initialization failed");
-  } else if (!keypad.begin(TCA8418_DEFAULT_ADDR, &Wire)) {
+  } else if (!keypad.begin(TCA8418_DEFAULT_ADDR, &I2C_keys)) {
     Serial.println("TCA8418 key controller not found");
   } else {
     keypad.matrix(7, 7);
