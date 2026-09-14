@@ -18,428 +18,425 @@ const char WEB_PAGE[] PROGMEM = R"HTMLPAGE(<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NanoEls</title>
 <style>
+:root {
+  --bg: #f4f5f7;
+  --card: #fff;
+  --ink: #14161a;
+  --dim: #5d6470;
+  --line: #dde1e7;
+  --accent: #0b6ec9;
+  --ok: #1c7c40;
+  --bad: #b5301f;
+  --warn: #8a5a00;
+  --warnbg: #fdf3d8;
+}
+
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #f4f5f7;
-    --card: #fff;
-    --ink: #14161a;
-    --dim: #5d6470;
-    --line: #dde1e7;
-    --accent: #0b6ec9;
-    --ok: #1c7c40;
-    --bad: #b5301f;
-    --warn: #8a5a00;
-    --warnbg: #fdf3d8;
+    --bg: #14161a;
+    --card: #1d2027;
+    --ink: #e9ecf1;
+    --dim: #99a1b0;
+    --line: #2e333d;
+    --accent: #54a8f0;
+    --ok: #4cc47c;
+    --bad: #ff7c68;
+    --warn: #e0b45a;
+    --warnbg: #2e2717;
   }
+}
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a;
-      --card: #1d2027;
-      --ink: #e9ecf1;
-      --dim: #99a1b0;
-      --line: #2e333d;
-      --accent: #54a8f0;
-      --ok: #4cc47c;
-      --bad: #ff7c68;
-      --warn: #e0b45a;
-      --warnbg: #2e2717;
-    }
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  padding: .7rem 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: .01em;
+}
+
+h1 span {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+#strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  margin-top: .5rem;
+}
+
+.chip {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  padding: .2rem .5rem;
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chip b {
+  font-weight: 600;
+}
+
+.chip.live {
+  color: var(--ok);
+}
+
+.chip.bad {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+  margin-bottom: .9rem;
+  overflow: hidden;
+}
+
+section > h2 {
+  margin: 0;
+  padding: .65rem .9rem;
+  font-size: .82rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  font-weight: 650;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .5rem .9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row label {
+  flex: 1;
+  min-width: 0;
+}
+
+.row .unit {
+  color: var(--dim);
+  font-size: .75rem;
+  width: 3.8rem;
+  white-space: nowrap;
+}
+
+input[type=text] {
+  width: 7.5rem;
+  padding: .4rem .5rem;
+  text-align: right;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+}
+
+input[type=text]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+/* Same footprint as the text box and the toggle, so every row's control lines up in one column. */
+select {
+  width: 7.5rem;
+  padding: .4rem .5rem;
+  font: inherit;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+}
+
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.row.dirty select {
+  border-color: var(--accent);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: .35rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  padding: .4rem .8rem;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.toggle {
+  width: 7.5rem;
+  font-weight: 600;
+}
+
+.toggle[data-on="1"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.row.ok {
+  animation: flash .9s;
+}
+
+@keyframes flash {
+  from {
+    background: rgba(28, 124, 64, .22);
   }
-
-  * {
-    box-sizing: border-box;
+  to {
+    background: transparent;
   }
+}
 
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
+.row.dirty {
+  background: rgba(11, 110, 201, .07);
+}
 
-  header {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: var(--card);
-    border-bottom: 1px solid var(--line);
-    padding: 0.7rem 1rem;
-  }
+.row.dirty label::after {
+  content: " •";
+  color: var(--accent);
+  font-weight: 700;
+}
 
-  h1 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 650;
-    letter-spacing: 0.01em;
-  }
+.row.dirty input[type=text] {
+  border-color: var(--accent);
+}
 
-  h1 span {
-    color: var(--dim);
-    font-weight: 400;
-  }
+/* Sticky action bar. Sits above the safe-area inset so it clears an iPhone's home indicator. */
+#bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: none;
+  align-items: center;
+  gap: .7rem;
+  padding: .7rem 1rem;
+  padding-bottom: calc(.7rem + env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, .13);
+}
 
-  #strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.45rem;
-    margin-top: 0.5rem;
-  }
+#bar.show {
+  display: flex;
+}
 
-  .chip {
-    background: var(--bg);
-    border: 1px solid var(--line);
-    border-radius: 0.4rem;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
+#count {
+  flex: 1;
+  font-size: .85rem;
+  color: var(--dim);
+}
 
-  .chip b {
-    font-weight: 600;
-  }
+#save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: .5rem 1.3rem;
+}
 
-  .chip.live {
-    color: var(--ok);
-  }
+#save:disabled {
+  opacity: .6;
+  cursor: default;
+}
 
-  .chip.bad {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
+body.pending {
+  padding-bottom: 4.5rem;
+}
 
-  main {
-    max-width: 44rem;
-    margin: 0 auto;
-    padding: 1rem;
-  }
+.err {
+  color: var(--bad);
+  font-size: .78rem;
+  padding: 0 .9rem .5rem;
+  margin-top: -.3rem;
+}
 
-  section {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 0.6rem;
-    margin-bottom: 0.9rem;
-    overflow: hidden;
-  }
+#banner {
+  display: none;
+  background: var(--warnbg);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: .5rem;
+  padding: .6rem .8rem;
+  margin-bottom: .9rem;
+  font-size: .88rem;
+}
 
-  section > h2 {
-    margin: 0;
-    padding: 0.65rem 0.9rem;
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--dim);
-    border-bottom: 1px solid var(--line);
-    font-weight: 650;
-  }
+#banner.show {
+  display: block;
+}
 
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.7rem;
-    padding: 0.5rem 0.9rem;
-    border-bottom: 1px solid var(--line);
-  }
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .6rem;
+  padding: .9rem;
+}
 
-  .row:last-child {
-    border-bottom: 0;
-  }
+.note {
+  color: var(--dim);
+  font-size: .8rem;
+  padding: 0 .9rem .9rem;
+}
 
-  .row label {
-    flex: 1;
-    min-width: 0;
-  }
+.tblwrap {
+  overflow-x: auto;
+}
 
-  .row .unit {
-    color: var(--dim);
-    font-size: 0.75rem;
-    width: 3.8rem;
-    white-space: nowrap;
-  }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: .85rem;
+}
 
-  input[type=text] {
-    width: 7.5rem;
-    padding: 0.4rem 0.5rem;
-    text-align: right;
-    font: inherit;
-    font-variant-numeric: tabular-nums;
-    background: var(--bg);
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-  }
+th,
+td {
+  padding: .4rem .6rem;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
 
-  input[type=text]:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-    border-color: transparent;
-  }
+th:first-child,
+td:first-child {
+  text-align: left;
+}
 
-  /* Same footprint as the text box and the toggle, so every row's control lines up in one column. */
-  select {
-    width: 7.5rem;
-    padding: 0.4rem 0.5rem;
-    font: inherit;
-    background: var(--bg);
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-  }
+thead th {
+  color: var(--dim);
+  font-weight: 600;
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
 
-  select:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-    border-color: transparent;
-  }
+tbody tr:last-child td {
+  border-bottom: 0;
+}
 
-  .row.dirty select {
-    border-color: var(--accent);
-  }
+td {
+  font-variant-numeric: tabular-nums;
+}
 
-  button {
-    font: inherit;
-    cursor: pointer;
-    border-radius: 0.35rem;
-    border: 1px solid var(--line);
-    background: var(--bg);
-    color: var(--ink);
-    padding: 0.4rem 0.8rem;
-  }
+td.warn {
+  color: var(--warn);
+  font-weight: 600;
+}
 
-  button:hover {
-    border-color: var(--accent);
-  }
+progress {
+  width: 100%;
+  height: .5rem;
+  margin-top: .6rem;
+}
 
-  .toggle {
-    width: 7.5rem;
-    font-weight: 600;
-  }
+a.btn {
+  text-decoration: none;
+}
+/* The G-code section collapses, since most visits are here for the settings. Its summary is styled
+   as the section heading it replaces. */
+summary {
+  padding: .65rem .9rem;
+  cursor: pointer;
+  font-size: .82rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--dim);
+  font-weight: 650;
+}
 
-  .toggle[data-on="1"] {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-  }
+details[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
 
-  .row.ok {
-    animation: flash 0.9s;
-  }
+summary span {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
 
-  @keyframes flash {
-    from {
-      background: rgba(28, 124, 64, 0.22);
-    }
+.pad {
+  padding: 0 .9rem .9rem;
+}
 
-    to {
-      background: transparent;
-    }
-  }
+textarea {
+  width: 100%;
+  min-height: 9rem;
+  padding: .5rem;
+  resize: vertical;
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+}
 
-  .row.dirty {
-    background: rgba(11, 110, 201, 0.07);
-  }
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
 
-  .row.dirty label::after {
-    content: " •";
-    color: var(--accent);
-    font-weight: 700;
-  }
+#gcname {
+  width: 11rem;
+  text-align: left;
+}
 
-  .row.dirty input[type=text] {
-    border-color: var(--accent);
-  }
+#gclist button,
+#gclist a.btn button {
+  padding: .25rem .5rem;
+  font-size: .8rem;
+}
 
-  /* Sticky action bar. Sits above the safe-area inset so it clears an iPhone's home indicator. */
-  #bar {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10;
-    display: none;
-    align-items: center;
-    gap: 0.7rem;
-    padding: 0.7rem 1rem;
-    padding-bottom: calc(0.7rem + env(safe-area-inset-bottom));
-    background: var(--card);
-    border-top: 1px solid var(--line);
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.13);
-  }
-
-  #bar.show {
-    display: flex;
-  }
-
-  #count {
-    flex: 1;
-    font-size: 0.85rem;
-    color: var(--dim);
-  }
-
-  #save {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    padding: 0.5rem 1.3rem;
-  }
-
-  #save:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  body.pending {
-    padding-bottom: 4.5rem;
-  }
-
-  .err {
-    color: var(--bad);
-    font-size: 0.78rem;
-    padding: 0 0.9rem 0.5rem;
-    margin-top: -0.3rem;
-  }
-
-  #banner {
-    display: none;
-    background: var(--warnbg);
-    color: var(--warn);
-    border: 1px solid var(--warn);
-    border-radius: 0.5rem;
-    padding: 0.6rem 0.8rem;
-    margin-bottom: 0.9rem;
-    font-size: 0.88rem;
-  }
-
-  #banner.show {
-    display: block;
-  }
-
-  .tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    padding: 0.9rem;
-  }
-
-  .note {
-    color: var(--dim);
-    font-size: 0.8rem;
-    padding: 0 0.9rem 0.9rem;
-  }
-
-  .tblwrap {
-    overflow-x: auto;
-  }
-
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 0.85rem;
-  }
-
-  th,
-  td {
-    padding: 0.4rem 0.6rem;
-    text-align: right;
-    white-space: nowrap;
-    border-bottom: 1px solid var(--line);
-  }
-
-  th:first-child,
-  td:first-child {
-    text-align: left;
-  }
-
-  thead th {
-    color: var(--dim);
-    font-weight: 600;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  tbody tr:last-child td {
-    border-bottom: 0;
-  }
-
-  td {
-    font-variant-numeric: tabular-nums;
-  }
-
-  td.warn {
-    color: var(--warn);
-    font-weight: 600;
-  }
-
-  progress {
-    width: 100%;
-    height: 0.5rem;
-    margin-top: 0.6rem;
-  }
-
-  a.btn {
-    text-decoration: none;
-  }
-
-  /* The G-code section collapses, since most visits are here for the settings. Its summary is styled
-     as the section heading it replaces. */
-  summary {
-    padding: 0.65rem 0.9rem;
-    cursor: pointer;
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--dim);
-    font-weight: 650;
-  }
-
-  details[open] > summary {
-    border-bottom: 1px solid var(--line);
-  }
-
-  summary span {
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 400;
-  }
-
-  .pad {
-    padding: 0 0.9rem 0.9rem;
-  }
-
-  textarea {
-    width: 100%;
-    min-height: 9rem;
-    padding: 0.5rem;
-    resize: vertical;
-    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg);
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-  }
-
-  textarea:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-    border-color: transparent;
-  }
-
-  #gcname {
-    width: 11rem;
-    text-align: left;
-  }
-
-  #gclist button,
-  #gclist a.btn button {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.8rem;
-  }
-
-  button.del {
-    color: var(--bad);
-  }
+button.del {
+  color: var(--bad);
+}
 </style>
 </head>
 <body>
@@ -464,8 +461,16 @@ const char WEB_PAGE[] PROGMEM = R"HTMLPAGE(<!doctype html>
     <details id="gcbox">
       <summary>G-code programs <span id="gccount"></span></summary>
       <div class="tblwrap">
-        <table><thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead>
-        <tbody id="gclist"></tbody></table>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="gclist"></tbody>
+        </table>
       </div>
       <div class="tools">
         <input type="text" id="gcname" placeholder="Program name" maxlength="24">
@@ -501,680 +506,598 @@ const char WEB_PAGE[] PROGMEM = R"HTMLPAGE(<!doctype html>
   <button type="button" id="save">Save</button>
 </div>
 <script>
-  "use strict";
+"use strict";
+var DU_MM = 10000, DU_IN = 254000;
+var metric = true, busy = false;
 
-  var DU_MM = 10000, DU_IN = 254000;
-  var metric = true, busy = false;
+function fmtDu(v){
+  if(metric) return (v/DU_MM).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") || "0";
+  return (v/DU_IN).toFixed(5).replace(/0+$/,"").replace(/\.$/,"") || "0";
+}
+function parseDu(t){
+  var n = parseFloat(t);
+  if(isNaN(n)) return null;
+  return Math.round(n * (metric ? DU_MM : DU_IN));
+}
 
-  function fmtDu(v) {
-    if (metric) return (v / DU_MM).toFixed(4).replace(/0+$/, "").replace(/\.$/, "") || "0";
-    return (v / DU_IN).toFixed(5).replace(/0+$/, "").replace(/\.$/, "") || "0";
+// Surface speed travels as metres per minute the way distances travel as deci-microns, and is
+// converted only here. A shop working in inches thinks in surface feet per minute.
+var FT_PER_M = 3.280839895;
+function fmtSpeed(v){ return String(metric ? v : Math.round(v * FT_PER_M)); }
+// The shown figure back to the stored m/min. Whole either way: the conversion out of feet is the
+// only rounding, and it is one the operator can see in the unit label.
+function speedToStored(n){ return Math.round(metric ? n : n / FT_PER_M); }
+function speedUnit(){ return metric ? "m/min" : "ft/min"; }
+
+// A plain count - passes, motor steps, an rpm limit - is stored whole. parseInt would take 4.5 as
+// 4 without a word, so the fraction is caught here and shown as an error instead. The panel's own
+// numpad refuses the decimal point on these same items.
+function parseCount(t){
+  if(/[.,]/.test(t)) return undefined;
+  var n = parseInt(t, 10);
+  return isNaN(n) ? null : n;
+}
+
+function post(key, value){
+  var body = "key=" + encodeURIComponent(key) + "&value=" + encodeURIComponent(value);
+  return fetch("/api/setting", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:body
+  }).then(function(r){ return r.json().catch(function(){ return {ok:false,error:"bad reply"}; }); });
+}
+
+function showError(row, msg){
+  var e = row.nextElementSibling;
+  if(!e || !e.classList.contains("err")){
+    e = document.createElement("div");
+    e.className = "err";
+    row.parentNode.insertBefore(e, row.nextSibling);
   }
+  e.textContent = msg;
+}
+function clearError(row){
+  var e = row.nextElementSibling;
+  if(e && e.classList.contains("err")) e.remove();
+}
+function flashOk(row){
+  row.classList.remove("ok");
+  void row.offsetWidth;
+  row.classList.add("ok");
+}
 
-  function parseDu(t) {
-    var n = parseFloat(t);
-    if (isNaN(n)) return null;
-    return Math.round(n * (metric ? DU_MM : DU_IN));
-  }
+// Edits are staged, not sent as you type. Nothing reaches the controller until Save, so a
+// half-typed number never lands on the machine and several related values (a pitch and the motor
+// steps that go with it) commit together instead of one at a time.
+var ALL = [];
 
-  // Surface speed travels as metres per minute the way distances travel as deci-microns, and is
-  // converted only here. A shop working in inches thinks in surface feet per minute.
-  var FT_PER_M = 3.280839895;
+function isDirty(item){ return item.pending !== undefined && item.pending !== item.value; }
 
-  function fmtSpeed(v) {
-    return String(metric ? v : Math.round(v * FT_PER_M));
-  }
+function dirtyItems(){ return ALL.filter(isDirty); }
 
-  // The shown figure back to the stored m/min. Whole either way: the conversion out of feet is the
-  // only rounding, and it is one the operator can see in the unit label.
-  function speedToStored(n) {
-    return Math.round(metric ? n : n / FT_PER_M);
-  }
+function refreshBar(){
+  var n = dirtyItems().length;
+  var bar = document.getElementById("bar");
+  document.getElementById("count").textContent =
+    n === 1 ? "1 unsaved change" : n + " unsaved changes";
+  bar.classList.toggle("show", n > 0);
+  // Reserve the bar's height so it can never cover the last row of settings.
+  document.body.classList.toggle("pending", n > 0);
+  ALL.forEach(function(it){
+    if(it.row) it.row.classList.toggle("dirty", isDirty(it));
+  });
+}
 
-  function speedUnit() {
-    return metric ? "m/min" : "ft/min";
-  }
+function shown(item, v){
+  if(item.kind === "du") return fmtDu(v);
+  if(item.kind === "speed") return fmtSpeed(v);
+  return String(v);
+}
 
-  // A plain count - passes, motor steps, an rpm limit - is stored whole. parseInt would take 4.5 as
-  // 4 without a word, so the fraction is caught here and shown as an error instead. The panel's own
-  // numpad refuses the decimal point on these same items.
-  function parseCount(t) {
-    if (/[.,]/.test(t)) return undefined;
-    var n = parseInt(t, 10);
-    return isNaN(n) ? null : n;
-  }
+// Distances and speeds carry no unit in the settings table because theirs is not fixed - it
+// follows the metric/inch setting - so it is supplied here. The panel has always named the unit
+// beside a distance; this page used to leave it blank.
+function unitText(item){
+  if(item.kind === "du") return metric ? "mm" : "in";
+  if(item.kind === "speed") return speedUnit();
+  return item.unit || "";
+}
 
-  function post(key, value) {
-    var body = "key=" + encodeURIComponent(key) + "&value=" + encodeURIComponent(value);
-    return fetch("/api/setting", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body
-    }).then(function(r) {
-      return r.json().catch(function() { return { ok: false, error: "bad reply" }; });
-    });
-  }
+function makeRow(item){
+  var row = document.createElement("div");
+  row.className = "row";
+  item.row = row;
+  var lab = document.createElement("label");
+  lab.textContent = item.label;
+  row.appendChild(lab);
 
-  function showError(row, msg) {
-    var e = row.nextElementSibling;
-    if (!e || !e.classList.contains("err")) {
-      e = document.createElement("div");
-      e.className = "err";
-      row.parentNode.insertBefore(e, row.nextSibling);
-    }
-    e.textContent = msg;
-  }
-
-  function clearError(row) {
-    var e = row.nextElementSibling;
-    if (e && e.classList.contains("err")) e.remove();
-  }
-
-  function flashOk(row) {
-    row.classList.remove("ok");
-    void row.offsetWidth;
-    row.classList.add("ok");
-  }
-
-  // Edits are staged, not sent as you type. Nothing reaches the controller until Save, so a
-  // half-typed number never lands on the machine and several related values (a pitch and the motor
-  // steps that go with it) commit together instead of one at a time.
-  var ALL = [];
-
-  function isDirty(item) {
-    return item.pending !== undefined && item.pending !== item.value;
-  }
-
-  function dirtyItems() {
-    return ALL.filter(isDirty);
-  }
-
-  function refreshBar() {
-    var n = dirtyItems().length;
-    var bar = document.getElementById("bar");
-    document.getElementById("count").textContent =
-      n === 1 ? "1 unsaved change" : n + " unsaved changes";
-    bar.classList.toggle("show", n > 0);
-
-    // Reserve the bar's height so it can never cover the last row of settings.
-    document.body.classList.toggle("pending", n > 0);
-    ALL.forEach(function(it) {
-      if (it.row) it.row.classList.toggle("dirty", isDirty(it));
-    });
-  }
-
-  function shown(item, v) {
-    if (item.kind === "du") return fmtDu(v);
-    if (item.kind === "speed") return fmtSpeed(v);
-    return String(v);
-  }
-
-  // Distances and speeds carry no unit in the settings table because theirs is not fixed - it
-  // follows the metric/inch setting - so it is supplied here. The panel has always named the unit
-  // beside a distance; this page used to leave it blank.
-  function unitText(item) {
-    if (item.kind === "du") return metric ? "mm" : "in";
-    if (item.kind === "speed") return speedUnit();
-    return item.unit || "";
-  }
-
-  function makeRow(item) {
-    var row = document.createElement("div");
-    row.className = "row";
-    item.row = row;
-
-    var lab = document.createElement("label");
-    lab.textContent = item.label;
-    row.appendChild(lab);
-
-    if (item.kind === "bool") {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "toggle";
-      var on = item.on || "on", off = item.off || "off";
-
-      item.paint = function() {
-        var v = item.pending !== undefined ? item.pending : item.value;
-        b.dataset.on = v ? "1" : "0";
-        b.textContent = v ? on : off;
-      };
-
-      item.paint();
-      b.onclick = function() {
-        var v = item.pending !== undefined ? item.pending : item.value;
-        item.pending = v ? 0 : 1;
-        item.paint();
-        clearError(row);
-        refreshBar();
-      };
-
-      row.appendChild(b);
-      var pad = document.createElement("span");
-      pad.className = "unit";
-      row.appendChild(pad);
-      return row;
-    }
-
-    if (item.kind === "list") {
-      var sel = document.createElement("select");
-      (item.options || []).forEach(function(name, i) {
-        var o = document.createElement("option");
-        o.value = String(i);
-        o.textContent = name;
-        sel.appendChild(o);
-      });
-
-      item.paint = function() {
-        sel.value = String(item.pending !== undefined ? item.pending : item.value);
-      };
-
-      item.paint();
-      sel.onchange = function() {
-        item.pending = parseInt(sel.value, 10);
-        clearError(row);
-        refreshBar();
-      };
-
-      row.appendChild(sel);
-      var listPad = document.createElement("span");
-      listPad.className = "unit";
-      row.appendChild(listPad);
-      return row;
-    }
-
-    var inp = document.createElement("input");
-    inp.type = "text";
-
-    // A phone keyboard with no point on it is a clearer refusal than an error message after the fact.
-    inp.inputMode = item.kind === "du" ? "decimal" : "numeric";
-    inp.value = shown(item, item.value);
-
-    // Declared before paint() so the unit can be repainted with the value. Distances and speeds
-    // have no fixed unit - it follows the metric/inch setting, which can be changed on the panel
-    // while this page is open - so the label has to be rewritten, not just the number.
-    var u = document.createElement("span");
-    u.className = "unit";
-
-    item.paint = function() {
-      inp.value = shown(item, item.pending !== undefined ? item.pending : item.value);
-      u.textContent = unitText(item);
+  if(item.kind === "bool"){
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "toggle";
+    var on = item.on || "on", off = item.off || "off";
+    item.paint = function(){
+      var v = item.pending !== undefined ? item.pending : item.value;
+      b.dataset.on = v ? "1" : "0";
+      b.textContent = v ? on : off;
     };
-
-    inp.oninput = function() {
-      // Only a distance takes a fraction, on this page as on the panel. A surface speed is stored in
-      // whole m/min, so a typed 30.5 would come back as 30 or 31 with nothing said about it.
-      var v = item.kind === "du" ? parseDu(inp.value) : parseCount(inp.value);
-      if (v !== undefined && v !== null && !isNaN(v) && item.kind === "speed") {
-        v = speedToStored(v);
-      }
-
-      if (v === undefined) {
-        showError(row, "whole numbers only");
-        item.pending = undefined;
-      } else if (v === null || isNaN(v)) {
-        showError(row, "not a number");
-        item.pending = undefined;
-      } else {
-        clearError(row);
-        item.pending = v;
-      }
+    item.paint();
+    b.onclick = function(){
+      var v = item.pending !== undefined ? item.pending : item.value;
+      item.pending = v ? 0 : 1;
+      item.paint();
+      clearError(row);
       refreshBar();
     };
-
-    // Enter saves everything rather than just this field, which is what you want after typing the
-    // last of a group of related values.
-    inp.onkeydown = function(e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        inp.blur();
-        saveAll();
-      }
-    };
-
-    row.appendChild(inp);
-    u.textContent = unitText(item);
-    row.appendChild(u);
+    row.appendChild(b);
+    var pad = document.createElement("span");
+    pad.className = "unit";
+    row.appendChild(pad);
     return row;
   }
 
-  // Sequentially, never in parallel: each write takes the controller's motion lock and commits to
-  // flash, and firing sixty at once would queue them all behind each other anyway while making the
-  // failure reporting much harder to follow.
-  function saveAll() {
-    var pending = dirtyItems();
-    if (pending.length === 0) return;
+  if(item.kind === "list"){
+    var sel = document.createElement("select");
+    (item.options || []).forEach(function(name, i){
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = name;
+      sel.appendChild(o);
+    });
+    item.paint = function(){
+      sel.value = String(item.pending !== undefined ? item.pending : item.value);
+    };
+    item.paint();
+    sel.onchange = function(){
+      item.pending = parseInt(sel.value, 10);
+      clearError(row);
+      refreshBar();
+    };
+    row.appendChild(sel);
+    var listPad = document.createElement("span");
+    listPad.className = "unit";
+    row.appendChild(listPad);
+    return row;
+  }
 
-    var btn = document.getElementById("save");
-    btn.disabled = true;
-    btn.textContent = "Saving...";
-    var failed = 0;
-
-    function next(i) {
-      if (i >= pending.length) {
-        btn.disabled = false;
-        btn.textContent = "Save";
-        refreshBar();
-        loadDerived();
-        if (failed === 0) document.getElementById("bar").classList.remove("show");
-        return;
-      }
-
-      var item = pending[i];
-      post(item.key, item.pending).then(function(r) {
-        if (r.ok) {
-          item.value = item.pending;
-          item.pending = undefined;
-          clearError(item.row);
-          flashOk(item.row);
-        } else {
-          failed++;
-          showError(item.row, r.error);
-        }
-        next(i + 1);
-      });
+  var inp = document.createElement("input");
+  inp.type = "text";
+  // A phone keyboard with no point on it is a clearer refusal than an error message after the fact.
+  inp.inputMode = item.kind === "du" ? "decimal" : "numeric";
+  inp.value = shown(item, item.value);
+  // Declared before paint() so the unit can be repainted with the value. Distances and speeds
+  // have no fixed unit - it follows the metric/inch setting, which can be changed on the panel
+  // while this page is open - so the label has to be rewritten, not just the number.
+  var u = document.createElement("span");
+  u.className = "unit";
+  item.paint = function(){
+    inp.value = shown(item, item.pending !== undefined ? item.pending : item.value);
+    u.textContent = unitText(item);
+  };
+  inp.oninput = function(){
+    // Only a distance takes a fraction, on this page as on the panel. A surface speed is stored in
+    // whole m/min, so a typed 30.5 would come back as 30 or 31 with nothing said about it.
+    var v = item.kind === "du" ? parseDu(inp.value)
+          : parseCount(inp.value);
+    if(v !== undefined && v !== null && !isNaN(v) && item.kind === "speed"){
+      v = speedToStored(v);
     }
-
-    next(0);
-  }
-
-  function discardAll() {
-    ALL.forEach(function(it) {
-      if (isDirty(it)) {
-        it.pending = undefined;
-        it.paint();
-        clearError(it.row);
-      }
-    });
-    refreshBar();
-  }
-
-  // ---- derived figures ----------------------------------------------------
-  // Nothing here is editable. It exists because the consequence of a setting is often invisible in
-  // the setting itself: a 3mm pitch on an axis that tops out at 300mm/min caps the spindle at
-  // 100rpm, and only this table says so.
-
-  function mmPerMin(du) {
-    return metric ? (du / DU_MM).toFixed(0) : (du / DU_IN).toFixed(1);
-  }
-
-  function len(du) {
-    return fmtDu(du) + (metric ? " mm" : " in");
-  }
-
-  function trim1(n) {
-    return n.toFixed(1).replace(/\.0$/, "");
-  }
-
-  // Resolution in mm would read 0.0008 and lose the interesting digits, so use the units a
-  // machinist actually thinks in at this scale.
-  function res(du) {
-    return metric ? (du / 10).toFixed(2) + " µm" : (du / 254).toFixed(4) + " thou";
-  }
-
-  function cell(text, warn) {
-    return "<td" + (warn ? ' class="warn"' : "") + ">" + text + "</td>";
-  }
-
-  function renderDerived(d) {
-    var speedUnit = metric ? "mm/min" : "in/min";
-    var h = '<section><h2>Derived from your settings</h2><div class="tblwrap"><table>' +
-      "<thead><tr><th>Axis</th><th>Resolution</th><th>Steps/" + (metric ? "mm" : "in") +
-      "</th><th>Max feed</th><th>Stops in</th><th>Backlash</th><th>Max rpm</th></tr></thead><tbody>";
-
-    d.axes.forEach(function(a) {
-      // Backlash compensation below one full step cannot do anything, which is worth flagging: the
-      // setting looks active but has no effect.
-      var blWarn = a.backlashSteps === 0;
-      var bl = a.backlashSteps + (blWarn ? " (none)" : "");
-      var rpm = d.pitch ? a.maxRpm : "—";
-      h += "<tr><td>" + a.name + "</td>" +
-        cell(res(a.resDu)) +
-        cell(trim1(metric ? a.stepsPerMm : a.stepsPerMm * 25.4)) +
-        cell(mmPerMin(a.feedDuMin) + " " + speedUnit) +
-        cell(len(a.stopDu)) +
-        cell(bl + " st", blWarn) +
-        cell(rpm) +
-        "</tr>";
-    });
-    h += "</tbody></table></div>";
-
-    var e = d.encoder;
-    h += '<div class="tblwrap"><table><thead><tr><th>Spindle</th><th>Counts/rev</th>' +
-      "<th>Angle</th><th>Encoder limit</th><th>Spindle limit</th><th>Dead-band</th>" +
-      "</tr></thead><tbody><tr>" +
-      "<td>encoder</td>" +
-      cell(e.counts + (e.divider > 1 ? " (÷" + e.divider + ")" : "")) +
-      cell(e.deg.toFixed(3) + "°") +
-      cell(e.maxEncoderRpm + " rpm") +
-      cell(e.maxSpindleRpm + " rpm") +
-      cell(e.symmetric ? "symmetric" : "one-way") +
-      "</tr></tbody></table></div>";
-
-    var notes = [];
-    if (d.pitch) {
-      var slowest = Math.min.apply(null, d.axes.filter(function(a) { return a.fitted; })
-                                             .map(function(a) { return a.maxRpm; }));
-      notes.push("At the pitch currently set, keep the spindle under <b>" + slowest +
-                 " rpm</b> or the axis cannot keep up and the thread will lose sync.");
+    if(v === undefined){
+      showError(row, "whole numbers only");
+      item.pending = undefined;
+    } else if(v === null || isNaN(v)){
+      showError(row, "not a number");
+      item.pending = undefined;
     } else {
-      notes.push("Set a pitch to see the spindle speed the axes can keep up with.");
+      clearError(row);
+      item.pending = v;
     }
-
-    notes.push("The encoder stops being read reliably above <b>" + e.maxSpindleRpm +
-               " rpm</b> at the spindle. Raise the glitch filter only if you understand that trade.");
-    notes.push("The <b>signal</b> chip at the top is live: it reads 100% on a clean encoder and " +
-               "keeps the lowest figure seen, so leave this page open through a job and check it " +
-               "afterwards. If it falls, fix the cable before masking it with the glitch filter or " +
-               "a symmetric dead-band.");
-    h += '<p class="note">' + notes.join("<br>") + "</p></section>";
-
-    document.getElementById("derived").innerHTML = h;
-  }
-
-  function loadDerived() {
-    fetch("/api/derived").then(function(r) { return r.json(); })
-      .then(renderDerived).catch(function() {});
-  }
-
-  function render(data) {
-    document.getElementById("ver").textContent = data.version;
-    metric = !!data.metric;
-    ALL = [];
-    var host = document.getElementById("settings");
-    host.textContent = "";
-
-    data.sections.forEach(function(sec) {
-      var s = document.createElement("section");
-      var h = document.createElement("h2");
-      h.textContent = sec.name;
-      s.appendChild(h);
-      sec.items.forEach(function(it) {
-        ALL.push(it);
-        s.appendChild(makeRow(it));
-      });
-      host.appendChild(s);
-    });
-
     refreshBar();
-  }
+  };
+  // Enter saves everything rather than just this field, which is what you want after typing the
+  // last of a group of related values.
+  inp.onkeydown = function(e){ if(e.key === "Enter"){ e.preventDefault(); inp.blur(); saveAll(); } };
+  row.appendChild(inp);
+  u.textContent = unitText(item);
+  row.appendChild(u);
+  return row;
+}
 
-  function chip(label, value, live, bad) {
-    return '<span class="chip' + (live ? " live" : "") + (bad ? " bad" : "") + '">' + label +
-      ' <b>' + value + '</b></span>';
-  }
+// Sequentially, never in parallel: each write takes the controller's motion lock and commits to
+// flash, and firing sixty at once would queue them all behind each other anyway while making the
+// failure reporting much harder to follow.
+function saveAll(){
+  var pending = dirtyItems();
+  if(pending.length === 0) return;
+  var btn = document.getElementById("save");
+  btn.disabled = true;
+  btn.textContent = "Saving...";
+  var failed = 0;
 
-  function status() {
-    if (document.hidden) return;
-
-    fetch("/api/status").then(function(r) { return r.json(); }).then(function(s) {
-      // The measurement system can be changed on the panel while this page is open. Every distance
-      // and speed on it is rendered in whichever is current, so follow the change rather than
-      // showing millimetres until someone reloads.
-      if (s.measure !== undefined) {
-        var wasMetric = metric;
-        metric = s.measure === 0;
-        if (metric !== wasMetric) {
-          ALL.forEach(function(it) {
-            if (it.paint) it.paint();
-          });
-          loadDerived();
-        }
-      }
-
-      var html = "";
-      html += chip("", s.on ? "RUNNING" : "stopped", s.on);
-      if (s.mode) html += chip("mode", s.mode);
-      html += chip("rpm", s.rpm);
-      html += chip("Z", fmtDu(s.z) + (metric ? " mm" : " in"));
-      html += chip(s.dia ? "X&oslash;" : "X", fmtDu(s.x) + (metric ? " mm" : " in"));
-      if (s.a1active) html += chip("C", fmtDu(s.a1));
-
-      // Cutting speed at the tool. Only meaningful once there is a diameter to cut, which means X
-      // zeroed on the centerline - before that it reads zero and saying so would just be noise.
-      if (s.surface > 0) html += chip("cut", fmtSpeed(s.surface) + " " + speedUnit());
-
-      // Constant speed: what the spindle should be doing, and which way to turn the dial. Green
-      // once you are within a tenth of the target, which is as close as a belt-step lathe gets.
-      if (s.targetRpm > 0) {
-        var off = Math.round((s.rpm - s.targetRpm) / s.targetRpm * 100);
-        var near = Math.abs(off) <= 10;
-        html += chip(s.material, s.targetRpm + " rpm " + (off >= 0 ? "+" : "") + off + "%", near, !near);
-      }
-
-      // Encoder signal. The low-water mark is the number that matters, so it is shown beside the
-      // current one rather than buried - noise arrives in bursts nobody is watching for.
-      if (s.coherence >= 0) {
-        var lo = s.worstCoherence;
-        var dirty = s.dirtyWindows > 0 || s.flips > 0;
-        var sig = s.coherence + "%";
-        if (lo >= 0 && lo < s.coherence) sig += " low " + lo + "%";
-        if (s.dirtyWindows > 0) sig += " · " + s.dirtyWindows + " bad";
-        if (s.flips > 0) sig += " · " + s.flips + " flips";
-        html += chip("signal", sig, !dirty && lo >= s.coherenceFloor, dirty || (lo >= 0 && lo < s.coherenceFloor));
-      }
-
-      document.getElementById("strip").innerHTML = html;
-
-      busy = !!s.busy;
-      var b = document.getElementById("banner");
-      if (busy) {
-        b.textContent = "The machine is running. Settings and firmware updates are refused until it is stopped.";
-        b.classList.add("show");
+  function next(i){
+    if(i >= pending.length){
+      btn.disabled = false;
+      btn.textContent = "Save";
+      refreshBar();
+      loadDerived();
+      if(failed === 0) document.getElementById("bar").classList.remove("show");
+      return;
+    }
+    var item = pending[i];
+    post(item.key, item.pending).then(function(r){
+      if(r.ok){
+        item.value = item.pending;
+        item.pending = undefined;
+        clearError(item.row);
+        flashOk(item.row);
       } else {
-        b.classList.remove("show");
+        failed++;
+        showError(item.row, r.error);
       }
-    }).catch(function() {});
+      next(i + 1);
+    });
   }
+  next(0);
+}
 
-  document.getElementById("save").onclick = saveAll;
-  document.getElementById("discard").onclick = discardAll;
-
-  // Staged edits live only in the page, so leaving with unsaved ones loses them silently.
-  window.onbeforeunload = function(e) {
-    if (dirtyItems().length > 0) {
-      e.preventDefault();
-      return "";
+function discardAll(){
+  ALL.forEach(function(it){
+    if(isDirty(it)){
+      it.pending = undefined;
+      it.paint();
+      clearError(it.row);
     }
-  };
+  });
+  refreshBar();
+}
 
-  document.getElementById("flash").onclick = function() {
-    var f = document.getElementById("fw").files[0];
-    var note = document.getElementById("fwnote");
-    if (!f) {
-      note.textContent = "Choose a .bin file first.";
-      return;
-    }
-    if (busy) {
-      note.textContent = "Stop the machine before updating.";
-      return;
-    }
+// ---- derived figures ----------------------------------------------------
+// Nothing here is editable. It exists because the consequence of a setting is often invisible in
+// the setting itself: a 3mm pitch on an axis that tops out at 300mm/min caps the spindle at
+// 100rpm, and only this table says so.
 
-    var prog = document.getElementById("prog");
-    prog.hidden = false;
+function mmPerMin(du){ return metric ? (du/DU_MM).toFixed(0) : (du/DU_IN).toFixed(1); }
+function len(du){ return fmtDu(du) + (metric ? " mm" : " in"); }
+function trim1(n){ return n.toFixed(1).replace(/\.0$/,""); }
+// Resolution in mm would read 0.0008 and lose the interesting digits, so use the units a
+// machinist actually thinks in at this scale.
+function res(du){ return metric ? (du/10).toFixed(2) + " µm" : (du/254).toFixed(4) + " thou"; }
 
-    var fd = new FormData();
-    fd.append("firmware", f, f.name);
+function cell(text, warn){
+  return "<td" + (warn ? ' class="warn"' : "") + ">" + text + "</td>";
+}
 
-    var xhr = new XMLHttpRequest();
-    xhr.open("POST", "/update");
-    xhr.upload.onprogress = function(e) {
-      if (e.lengthComputable) prog.value = (e.loaded / e.total) * 100;
-    };
-    xhr.onload = function() {
-      var r = {};
-      try { r = JSON.parse(xhr.responseText); } catch (err) {}
-      if (r.ok) {
-        note.textContent = "Installed. The controller is restarting - reconnect to its WiFi in a few seconds.";
-      } else {
-        note.textContent = "Update failed: " + (r.error || xhr.status);
-        prog.hidden = true;
+function renderDerived(d){
+  var speedUnit = metric ? "mm/min" : "in/min";
+  var h = '<section><h2>Derived from your settings</h2>' +
+    '<div class="tblwrap"><table><thead><tr>' +
+    "<th>Axis</th>" +
+    "<th>Resolution</th>" +
+    "<th>Steps/" + (metric ? "mm" : "in") + "</th>" +
+    "<th>Max feed</th>" +
+    "<th>Stops in</th>" +
+    "<th>Backlash</th>" +
+    "<th>Max rpm</th>" +
+    "</tr></thead><tbody>";
+
+  d.axes.forEach(function(a){
+    // Backlash compensation below one full step cannot do anything, which is worth flagging: the
+    // setting looks active but has no effect.
+    var blWarn = a.backlashSteps === 0;
+    var bl = a.backlashSteps + (blWarn ? " (none)" : "");
+    var rpm = d.pitch ? a.maxRpm : "—";
+    h += "<tr><td>" + a.name + "</td>" +
+      cell(res(a.resDu)) +
+      cell(trim1(metric ? a.stepsPerMm : a.stepsPerMm * 25.4)) +
+      cell(mmPerMin(a.feedDuMin) + " " + speedUnit) +
+      cell(len(a.stopDu)) +
+      cell(bl + " st", blWarn) +
+      cell(rpm) +
+      "</tr>";
+  });
+  h += "</tbody></table></div>";
+
+  var e = d.encoder;
+  h += '<div class="tblwrap"><table><thead><tr>' +
+    "<th>Spindle</th>" +
+    "<th>Counts/rev</th>" +
+    "<th>Angle</th>" +
+    "<th>Encoder limit</th>" +
+    "<th>Spindle limit</th>" +
+    "<th>Dead-band</th>" +
+    "</tr></thead><tbody><tr>" +
+    "<td>encoder</td>" +
+    cell(e.counts + (e.divider > 1 ? " (÷" + e.divider + ")" : "")) +
+    cell(e.deg.toFixed(3) + "°") +
+    cell(e.maxEncoderRpm + " rpm") +
+    cell(e.maxSpindleRpm + " rpm") +
+    cell(e.symmetric ? "symmetric" : "one-way") +
+    "</tr></tbody></table></div>";
+
+  var notes = [];
+  if(d.pitch){
+    var slowest = Math.min.apply(null, d.axes.filter(function(a){ return a.fitted; })
+                                             .map(function(a){ return a.maxRpm; }));
+    notes.push("At the pitch currently set, keep the spindle under <b>" + slowest +
+               " rpm</b> or the axis cannot keep up and the thread will lose sync.");
+  } else {
+    notes.push("Set a pitch to see the spindle speed the axes can keep up with.");
+  }
+  notes.push("The encoder stops being read reliably above <b>" + e.maxSpindleRpm +
+             " rpm</b> at the spindle. Raise the glitch filter only if you understand that trade.");
+  notes.push("The <b>signal</b> chip at the top is live: it reads 100% on a clean encoder and " +
+             "keeps the lowest figure seen, so leave this page open through a job and check it " +
+             "afterwards. If it falls, fix the cable before masking it with the glitch filter or " +
+             "a symmetric dead-band.");
+  h += '<p class="note">' + notes.join("<br>") + "</p></section>";
+
+  document.getElementById("derived").innerHTML = h;
+}
+
+function loadDerived(){
+  fetch("/api/derived").then(function(r){ return r.json(); })
+    .then(renderDerived).catch(function(){});
+}
+
+function render(data){
+  document.getElementById("ver").textContent = data.version;
+  metric = !!data.metric;
+  ALL = [];
+  var host = document.getElementById("settings");
+  host.textContent = "";
+  data.sections.forEach(function(sec){
+    var s = document.createElement("section");
+    var h = document.createElement("h2");
+    h.textContent = sec.name;
+    s.appendChild(h);
+    sec.items.forEach(function(it){ ALL.push(it); s.appendChild(makeRow(it)); });
+    host.appendChild(s);
+  });
+  refreshBar();
+}
+
+function chip(label, value, live, bad){
+  return '<span class="chip' + (live ? " live" : "") + (bad ? " bad" : "") + '">' + label +
+         ' <b>' + value + '</b></span>';
+}
+
+function status(){
+  if(document.hidden) return;
+  fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+    // The measurement system can be changed on the panel while this page is open. Every distance
+    // and speed on it is rendered in whichever is current, so follow the change rather than
+    // showing millimetres until someone reloads.
+    if(s.measure !== undefined){
+      var wasMetric = metric;
+      metric = s.measure === 0;
+      if(metric !== wasMetric){
+        ALL.forEach(function(it){ if(it.paint) it.paint(); });
+        loadDerived();
       }
-    };
-    xhr.onerror = function() {
-      // The controller reboots the moment it finishes, so a dropped connection here is expected and
-      // usually means it worked.
-      note.textContent = "Connection closed. If the update completed the controller is restarting.";
-    };
-    xhr.send(fd);
-  };
-
-  // Fetched when the section is opened and after every change, deliberately not on the status poll:
-  // each list rebuild opens every stored file to size it.
-  var gcNote = document.getElementById("gcnote");
-  var gcList = document.getElementById("gclist");
-  var gcName = document.getElementById("gcname");
-  var gcText = document.getElementById("gctext");
-  var gcProg = document.getElementById("gcprog");
-
-  function gcSay(msg) {
-    gcNote.textContent = msg;
-  }
-
-  function gcSize(n) {
-    return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " kB";
-  }
-
-  function gcBtn(text, cls, fn) {
-    var b = document.createElement("button");
-    b.type = "button";
-    b.textContent = text;
-    if (cls) b.className = cls;
-    b.onclick = fn;
-    return b;
-  }
-
-  function gcRow(it) {
-    var tr = document.createElement("tr");
-
-    // textContent throughout: a name read back off the filesystem is not ours to trust as markup.
-    var name = document.createElement("td");
-    name.textContent = it.name;
-
-    var size = document.createElement("td");
-    size.textContent = gcSize(it.size);
-
-    var act = document.createElement("td");
-    var dl = document.createElement("a");
-    dl.className = "btn";
-    dl.href = "/api/gcode/get?download=1&name=" + encodeURIComponent(it.name);
-    dl.appendChild(gcBtn("Download", "", null));
-    act.appendChild(gcBtn("Edit", "", function() { gcEdit(it.name); }));
-    act.appendChild(document.createTextNode(" "));
-    act.appendChild(dl);
-    act.appendChild(document.createTextNode(" "));
-    act.appendChild(gcBtn("Delete", "del", function() { gcDelete(it.name); }));
-
-    tr.appendChild(name);
-    tr.appendChild(size);
-    tr.appendChild(act);
-    return tr;
-  }
-
-  function gcLoad() {
-    fetch("/api/gcode/list").then(function(r) { return r.json(); }).then(function(d) {
-      gcList.innerHTML = "";
-      d.items.forEach(function(it) { gcList.appendChild(gcRow(it)); });
-      document.getElementById("gccount").textContent =
-        d.items.length + " of " + d.max + ", " + gcSize(d.free) + " free";
-    }).catch(function() { gcSay("Could not load the program list."); });
-  }
-
-  function gcPost(url, body, okMsg) {
-    fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body })
-      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, err: j.error }; }); })
-      .then(function(r) {
-        gcSay(r.ok ? okMsg : "Refused: " + (r.err || "unknown error"));
-        gcLoad();
-      }).catch(function() { gcSay("Connection failed."); });
-  }
-
-  function gcEdit(name) {
-    fetch("/api/gcode/get?name=" + encodeURIComponent(name))
-      .then(function(r) { return r.text(); })
-      .then(function(t) {
-        gcName.value = name;
-        gcText.value = t;
-        gcSay("Loaded " + name + ". Saving writes it back under that name.");
-      }).catch(function() { gcSay("Could not load " + name + "."); });
-  }
-
-  function gcDelete(name) {
-    if (!confirm("Delete " + name + "?")) return;
-    gcPost("/api/gcode/delete", "name=" + encodeURIComponent(name), "Deleted " + name + ".");
-  }
-
-  document.getElementById("gcsave").onclick = function() {
-    var n = gcName.value.trim();
-    if (n.length < 2) {
-      gcSay("The name needs at least 2 characters.");
-      return;
     }
-    if (gcText.value.trim().length < 2) {
-      gcSay("There is nothing to save.");
-      return;
+    var html = "";
+    html += chip("", s.on ? "RUNNING" : "stopped", s.on);
+    if(s.mode) html += chip("mode", s.mode);
+    html += chip("rpm", s.rpm);
+    html += chip("Z", fmtDu(s.z) + (metric ? " mm" : " in"));
+    html += chip(s.dia ? "X&oslash;" : "X", fmtDu(s.x) + (metric ? " mm" : " in"));
+    if(s.a1active) html += chip("C", fmtDu(s.a1));
+
+    // Cutting speed at the tool. Only meaningful once there is a diameter to cut, which means X
+    // zeroed on the centerline - before that it reads zero and saying so would just be noise.
+    if(s.surface > 0) html += chip("cut", fmtSpeed(s.surface) + " " + speedUnit());
+
+    // Constant speed: what the spindle should be doing, and which way to turn the dial. Green
+    // once you are within a tenth of the target, which is as close as a belt-step lathe gets.
+    if(s.targetRpm > 0){
+      var off = Math.round((s.rpm - s.targetRpm) / s.targetRpm * 100);
+      var near = Math.abs(off) <= 10;
+      html += chip(s.material, s.targetRpm + " rpm " + (off >= 0 ? "+" : "") + off + "%", near, !near);
     }
 
-    gcPost("/api/gcode/save",
-      "name=" + encodeURIComponent(n) + "&text=" + encodeURIComponent(gcText.value),
-      "Saved " + n + ".");
+    // Encoder signal. The low-water mark is the number that matters, so it is shown beside the
+    // current one rather than buried - noise arrives in bursts nobody is watching for.
+    if(s.coherence >= 0){
+      var lo = s.worstCoherence;
+      var dirty = s.dirtyWindows > 0 || s.flips > 0;
+      var sig = s.coherence + "%";
+      if(lo >= 0 && lo < s.coherence) sig += " low " + lo + "%";
+      if(s.dirtyWindows > 0) sig += " · " + s.dirtyWindows + " bad";
+      if(s.flips > 0) sig += " · " + s.flips + " flips";
+      html += chip("signal", sig, !dirty && lo >= s.coherenceFloor, dirty || (lo >= 0 && lo < s.coherenceFloor));
+    }
+    document.getElementById("strip").innerHTML = html;
+
+    busy = !!s.busy;
+    var b = document.getElementById("banner");
+    if(busy){
+      b.textContent = "The machine is running. Settings and firmware updates are refused until it is stopped.";
+      b.classList.add("show");
+    } else {
+      b.classList.remove("show");
+    }
+  }).catch(function(){});
+}
+
+document.getElementById("save").onclick = saveAll;
+document.getElementById("discard").onclick = discardAll;
+
+// Staged edits live only in the page, so leaving with unsaved ones loses them silently.
+window.onbeforeunload = function(e){
+  if(dirtyItems().length > 0){ e.preventDefault(); return ""; }
+};
+
+document.getElementById("flash").onclick = function(){
+  var f = document.getElementById("fw").files[0];
+  var note = document.getElementById("fwnote");
+  if(!f){ note.textContent = "Choose a .bin file first."; return; }
+  if(busy){ note.textContent = "Stop the machine before updating."; return; }
+  var prog = document.getElementById("prog");
+  prog.hidden = false;
+  var fd = new FormData();
+  fd.append("firmware", f, f.name);
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", "/update");
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable) prog.value = (e.loaded / e.total) * 100;
   };
-
-  document.getElementById("gcclear").onclick = function() {
-    if (!confirm("Delete every stored program?")) return;
-    gcPost("/api/gcode/deleteall", "", "All programs deleted.");
+  xhr.onload = function(){
+    var r = {};
+    try { r = JSON.parse(xhr.responseText); } catch(err){}
+    if(r.ok){
+      note.textContent = "Installed. The controller is restarting - reconnect to its WiFi in a few seconds.";
+    } else {
+      note.textContent = "Update failed: " + (r.error || xhr.status);
+      prog.hidden = true;
+    }
   };
-
-  document.getElementById("gcbrowse").onclick = function() {
-    document.getElementById("gcfile").click();
+  xhr.onerror = function(){
+    // The controller reboots the moment it finishes, so a dropped connection here is expected and
+    // usually means it worked.
+    note.textContent = "Connection closed. If the update completed the controller is restarting.";
   };
+  xhr.send(fd);
+};
 
-  document.getElementById("gcfile").onchange = function() {
-    var f = this.files[0];
-    this.value = "";
-    if (!f) return;
+// Fetched when the section is opened and after every change, deliberately not on the status poll:
+// each list rebuild opens every stored file to size it.
+var gcNote = document.getElementById("gcnote");
+var gcList = document.getElementById("gclist");
+var gcName = document.getElementById("gcname");
+var gcText = document.getElementById("gctext");
+var gcProg = document.getElementById("gcprog");
 
-    // Streamed rather than read into the page first, so file size is bounded by the controller's
-    // filesystem and not by what the browser can hold.
-    var n = gcName.value.trim();
-    var fd = new FormData();
-    fd.append("gcode", f, f.name);
+function gcSay(msg){ gcNote.textContent = msg; }
 
-    var xhr = new XMLHttpRequest();
-    gcProg.value = 0;
-    gcProg.hidden = false;
-    xhr.open("POST", "/api/gcode/upload" + (n ? "?name=" + encodeURIComponent(n) : ""));
-    xhr.upload.onprogress = function(e) {
-      if (e.lengthComputable) gcProg.value = (e.loaded / e.total) * 100;
-    };
-    xhr.onload = function() {
-      gcProg.hidden = true;
-      var r = {};
-      try { r = JSON.parse(xhr.responseText); } catch (err) {}
-      gcSay(r.ok ? "Uploaded as " + r.name + "." : "Upload failed: " + (r.error || xhr.status));
+function gcSize(n){ return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " kB"; }
+
+function gcBtn(text, cls, fn){
+  var b = document.createElement("button");
+  b.type = "button";
+  b.textContent = text;
+  if(cls) b.className = cls;
+  b.onclick = fn;
+  return b;
+}
+
+function gcRow(it){
+  var tr = document.createElement("tr");
+  // textContent throughout: a name read back off the filesystem is not ours to trust as markup.
+  var name = document.createElement("td");
+  name.textContent = it.name;
+  var size = document.createElement("td");
+  size.textContent = gcSize(it.size);
+  var act = document.createElement("td");
+  var dl = document.createElement("a");
+  dl.className = "btn";
+  dl.href = "/api/gcode/get?download=1&name=" + encodeURIComponent(it.name);
+  dl.appendChild(gcBtn("Download", "", null));
+  act.appendChild(gcBtn("Edit", "", function(){ gcEdit(it.name); }));
+  act.appendChild(document.createTextNode(" "));
+  act.appendChild(dl);
+  act.appendChild(document.createTextNode(" "));
+  act.appendChild(gcBtn("Delete", "del", function(){ gcDelete(it.name); }));
+  tr.appendChild(name);
+  tr.appendChild(size);
+  tr.appendChild(act);
+  return tr;
+}
+
+function gcLoad(){
+  fetch("/api/gcode/list").then(function(r){ return r.json(); }).then(function(d){
+    gcList.innerHTML = "";
+    d.items.forEach(function(it){ gcList.appendChild(gcRow(it)); });
+    document.getElementById("gccount").textContent =
+      d.items.length + " of " + d.max + ", " + gcSize(d.free) + " free";
+  }).catch(function(){ gcSay("Could not load the program list."); });
+}
+
+function gcPost(url, body, okMsg){
+  fetch(url, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:body})
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, err:j.error}; }); })
+    .then(function(r){
+      gcSay(r.ok ? okMsg : "Refused: " + (r.err || "unknown error"));
       gcLoad();
-    };
-    xhr.onerror = function() {
-      gcProg.hidden = true;
-      gcSay("Upload failed.");
-      gcLoad();
-    };
-    xhr.send(fd);
+    }).catch(function(){ gcSay("Connection failed."); });
+}
+
+function gcEdit(name){
+  fetch("/api/gcode/get?name=" + encodeURIComponent(name))
+    .then(function(r){ return r.text(); })
+    .then(function(t){
+      gcName.value = name;
+      gcText.value = t;
+      gcSay("Loaded " + name + ". Saving writes it back under that name.");
+    }).catch(function(){ gcSay("Could not load " + name + "."); });
+}
+
+function gcDelete(name){
+  if(!confirm("Delete " + name + "?")) return;
+  gcPost("/api/gcode/delete", "name=" + encodeURIComponent(name), "Deleted " + name + ".");
+}
+
+document.getElementById("gcsave").onclick = function(){
+  var n = gcName.value.trim();
+  if(n.length < 2){ gcSay("The name needs at least 2 characters."); return; }
+  if(gcText.value.trim().length < 2){ gcSay("There is nothing to save."); return; }
+  gcPost("/api/gcode/save",
+    "name=" + encodeURIComponent(n) + "&text=" + encodeURIComponent(gcText.value),
+    "Saved " + n + ".");
+};
+
+document.getElementById("gcclear").onclick = function(){
+  if(!confirm("Delete every stored program?")) return;
+  gcPost("/api/gcode/deleteall", "", "All programs deleted.");
+};
+
+document.getElementById("gcbrowse").onclick = function(){
+  document.getElementById("gcfile").click();
+};
+
+document.getElementById("gcfile").onchange = function(){
+  var f = this.files[0];
+  this.value = "";
+  if(!f) return;
+  // Streamed rather than read into the page first, so file size is bounded by the controller's
+  // filesystem and not by what the browser can hold.
+  var n = gcName.value.trim();
+  var fd = new FormData();
+  fd.append("gcode", f, f.name);
+  var xhr = new XMLHttpRequest();
+  gcProg.value = 0;
+  gcProg.hidden = false;
+  xhr.open("POST", "/api/gcode/upload" + (n ? "?name=" + encodeURIComponent(n) : ""));
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable) gcProg.value = (e.loaded / e.total) * 100;
   };
+  xhr.onload = function(){
+    gcProg.hidden = true;
+    var r = {};
+    try { r = JSON.parse(xhr.responseText); } catch(err){}
+    gcSay(r.ok ? "Uploaded as " + r.name + "." : "Upload failed: " + (r.error || xhr.status));
+    gcLoad();
+  };
+  xhr.onerror = function(){
+    gcProg.hidden = true;
+    gcSay("Upload failed.");
+    gcLoad();
+  };
+  xhr.send(fd);
+};
 
-  document.getElementById("gcbox").addEventListener("toggle", function() {
-    if (this.open) gcLoad();
-  });
+document.getElementById("gcbox").addEventListener("toggle", function(){
+  if(this.open) gcLoad();
+});
 
-  // Settings first: it sets `metric`, which decides the units the derived table is written in.
-  fetch("/api/settings").then(function(r) { return r.json(); }).then(function(d) {
-    render(d);
-    loadDerived();
-  }).catch(function() {
-    document.getElementById("settings").textContent = "Could not load settings.";
-  });
-
-  status();
-  setInterval(status, 1000);
+// Settings first: it sets `metric`, which decides the units the derived table is written in.
+fetch("/api/settings").then(function(r){ return r.json(); }).then(function(d){
+  render(d);
+  loadDerived();
+}).catch(function(){
+  document.getElementById("settings").textContent = "Could not load settings.";
+});
+status();
+setInterval(status, 1000);
 </script>
 </body>
 </html>
