@@ -121,17 +121,6 @@ section {
   overflow: hidden;
 }
 
-section > h2 {
-  margin: 0;
-  padding: .65rem .9rem;
-  font-size: .82rem;
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  color: var(--dim);
-  border-bottom: 1px solid var(--line);
-  font-weight: 650;
-}
-
 .row {
   display: flex;
   align-items: center;
@@ -450,11 +439,13 @@ button.del {
   <div id="settings"></div>
 
   <section>
-    <h2>Backup</h2>
-    <div class="tools">
-      <a class="btn" href="/api/dump" download><button type="button">Download settings</button></a>
-    </div>
-    <p class="note">Saves every value as text. Restore by pasting the lines back over USB serial.</p>
+    <details>
+      <summary>Backup</summary>
+      <div class="tools">
+        <a class="btn" href="/api/dump" download><button type="button">Download settings</button></a>
+      </div>
+      <p class="note">Saves every value as text. Restore by pasting the lines back over USB serial.</p>
+    </details>
   </section>
 
   <section>
@@ -489,14 +480,16 @@ button.del {
   </section>
 
   <section>
-    <h2>Firmware update</h2>
-    <div class="tools">
-      <input type="file" id="fw" accept=".bin">
-      <button type="button" id="flash">Install</button>
-    </div>
-    <progress id="prog" value="0" max="100" hidden></progress>
-    <p class="note" id="fwnote">Upload a compiled .bin. The machine must be stopped. It restarts by
-      itself when the update finishes &mdash; do not cut the power while it is writing.</p>
+    <details>
+      <summary>Firmware update</summary>
+      <div class="tools">
+        <input type="file" id="fw" accept=".bin">
+        <button type="button" id="flash">Install</button>
+      </div>
+      <progress id="prog" value="0" max="100" hidden></progress>
+      <p class="note" id="fwnote">Upload a compiled .bin. The machine must be stopped. It restarts by
+        itself when the update finishes &mdash; do not cut the power while it is writing.</p>
+    </details>
   </section>
 </main>
 
@@ -548,6 +541,9 @@ function post(key, value){
 }
 
 function showError(row, msg){
+  // Sections collapse, and a refusal nobody can see is the same as no refusal at all.
+  var box = row.closest("details");
+  if(box) box.open = true;
   var e = row.nextElementSibling;
   if(!e || !e.classList.contains("err")){
     e = document.createElement("div");
@@ -769,7 +765,11 @@ function cell(text, warn){
 
 function renderDerived(d){
   var speedUnit = metric ? "mm/min" : "in/min";
-  var h = '<section><h2>Derived from your settings</h2>' +
+  // Rebuilt after every save, so a box the operator collapsed must not spring back open.
+  var box = document.querySelector("#derived details");
+  var open = box ? box.open : true;
+  var h = '<section><details' + (open ? " open" : "") + '>' +
+    '<summary>Derived from your settings</summary>' +
     '<div class="tblwrap"><table><thead><tr>' +
     "<th>Axis</th>" +
     "<th>Resolution</th>" +
@@ -829,7 +829,7 @@ function renderDerived(d){
              "keeps the lowest figure seen, so leave this page open through a job and check it " +
              "afterwards. If it falls, fix the cable before masking it with the glitch filter or " +
              "a symmetric dead-band.");
-  h += '<p class="note">' + notes.join("<br>") + "</p></section>";
+  h += '<p class="note">' + notes.join("<br>") + "</p></details></section>";
 
   document.getElementById("derived").innerHTML = h;
 }
@@ -847,10 +847,12 @@ function render(data){
   host.textContent = "";
   data.sections.forEach(function(sec){
     var s = document.createElement("section");
-    var h = document.createElement("h2");
-    h.textContent = sec.name;
-    s.appendChild(h);
-    sec.items.forEach(function(it){ ALL.push(it); s.appendChild(makeRow(it)); });
+    var box = document.createElement("details");
+    var sum = document.createElement("summary");
+    sum.textContent = sec.name;
+    box.appendChild(sum);
+    sec.items.forEach(function(it){ ALL.push(it); box.appendChild(makeRow(it)); });
+    s.appendChild(box);
     host.appendChild(s);
   });
   refreshBar();
