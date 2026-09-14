@@ -98,6 +98,20 @@ td{font-variant-numeric:tabular-nums}
 td.warn{color:var(--warn);font-weight:600}
 progress{width:100%;height:.5rem;margin-top:.6rem}
 a.btn{text-decoration:none}
+/* The G-code section collapses, since most visits are here for the settings. Its summary is styled
+   as the section heading it replaces. */
+summary{padding:.65rem .9rem;cursor:pointer;font-size:.82rem;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--dim);font-weight:650}
+details[open]>summary{border-bottom:1px solid var(--line)}
+summary span{text-transform:none;letter-spacing:0;font-weight:400}
+.pad{padding:0 .9rem .9rem}
+textarea{width:100%;min-height:9rem;padding:.5rem;resize:vertical;
+  font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:.35rem}
+textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+#gcname{width:11rem;text-align:left}
+#gclist button,#gclist a.btn button{padding:.25rem .5rem;font-size:.8rem}
+button.del{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -116,6 +130,29 @@ a.btn{text-decoration:none}
       <a class="btn" href="/api/dump" download><button type="button">Download settings</button></a>
     </div>
     <p class="note">Saves every value as text. Restore by pasting the lines back over USB serial.</p>
+  </section>
+
+  <section>
+    <details id="gcbox">
+      <summary>G-code programs <span id="gccount"></span></summary>
+      <div class="tblwrap">
+        <table><thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead>
+        <tbody id="gclist"></tbody></table>
+      </div>
+      <div class="tools">
+        <input type="text" id="gcname" placeholder="Program name" maxlength="24">
+        <button type="button" id="gcsave">Save</button>
+        <button type="button" id="gcbrowse">Upload file</button>
+        <input type="file" id="gcfile" accept=".gcode,.nc,.txt" hidden>
+        <button type="button" id="gcclear" class="del">Delete all</button>
+      </div>
+      <div class="pad">
+        <textarea id="gctext" placeholder="G-code, one command per line"></textarea>
+        <progress id="gcprog" value="0" max="100" hidden></progress>
+      </div>
+      <p class="note" id="gcnote">Programs are picked on the panel in GCODE mode. Names take
+        letters, digits, spaces, - and _. The machine must be stopped to change them.</p>
+    </details>
   </section>
 
   <section>
@@ -576,6 +613,136 @@ document.getElementById("flash").onclick = function(){
   };
   xhr.send(fd);
 };
+
+// Fetched when the section is opened and after every change, deliberately not on the status poll:
+// each list rebuild opens every stored file to size it.
+var gcNote = document.getElementById("gcnote");
+var gcList = document.getElementById("gclist");
+var gcName = document.getElementById("gcname");
+var gcText = document.getElementById("gctext");
+var gcProg = document.getElementById("gcprog");
+
+function gcSay(msg){ gcNote.textContent = msg; }
+
+function gcSize(n){ return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " kB"; }
+
+function gcBtn(text, cls, fn){
+  var b = document.createElement("button");
+  b.type = "button";
+  b.textContent = text;
+  if(cls) b.className = cls;
+  b.onclick = fn;
+  return b;
+}
+
+function gcRow(it){
+  var tr = document.createElement("tr");
+  // textContent throughout: a name read back off the filesystem is not ours to trust as markup.
+  var name = document.createElement("td");
+  name.textContent = it.name;
+  var size = document.createElement("td");
+  size.textContent = gcSize(it.size);
+  var act = document.createElement("td");
+  var dl = document.createElement("a");
+  dl.className = "btn";
+  dl.href = "/api/gcode/get?download=1&name=" + encodeURIComponent(it.name);
+  dl.appendChild(gcBtn("Download", "", null));
+  act.appendChild(gcBtn("Edit", "", function(){ gcEdit(it.name); }));
+  act.appendChild(document.createTextNode(" "));
+  act.appendChild(dl);
+  act.appendChild(document.createTextNode(" "));
+  act.appendChild(gcBtn("Delete", "del", function(){ gcDelete(it.name); }));
+  tr.appendChild(name);
+  tr.appendChild(size);
+  tr.appendChild(act);
+  return tr;
+}
+
+function gcLoad(){
+  fetch("/api/gcode/list").then(function(r){ return r.json(); }).then(function(d){
+    gcList.innerHTML = "";
+    d.items.forEach(function(it){ gcList.appendChild(gcRow(it)); });
+    document.getElementById("gccount").textContent =
+      d.items.length + " of " + d.max + ", " + gcSize(d.free) + " free";
+  }).catch(function(){ gcSay("Could not load the program list."); });
+}
+
+function gcPost(url, body, okMsg){
+  fetch(url, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:body})
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, err:j.error}; }); })
+    .then(function(r){
+      gcSay(r.ok ? okMsg : "Refused: " + (r.err || "unknown error"));
+      gcLoad();
+    }).catch(function(){ gcSay("Connection failed."); });
+}
+
+function gcEdit(name){
+  fetch("/api/gcode/get?name=" + encodeURIComponent(name))
+    .then(function(r){ return r.text(); })
+    .then(function(t){
+      gcName.value = name;
+      gcText.value = t;
+      gcSay("Loaded " + name + ". Saving writes it back under that name.");
+    }).catch(function(){ gcSay("Could not load " + name + "."); });
+}
+
+function gcDelete(name){
+  if(!confirm("Delete " + name + "?")) return;
+  gcPost("/api/gcode/delete", "name=" + encodeURIComponent(name), "Deleted " + name + ".");
+}
+
+document.getElementById("gcsave").onclick = function(){
+  var n = gcName.value.trim();
+  if(n.length < 2){ gcSay("The name needs at least 2 characters."); return; }
+  if(gcText.value.trim().length < 2){ gcSay("There is nothing to save."); return; }
+  gcPost("/api/gcode/save",
+    "name=" + encodeURIComponent(n) + "&text=" + encodeURIComponent(gcText.value),
+    "Saved " + n + ".");
+};
+
+document.getElementById("gcclear").onclick = function(){
+  if(!confirm("Delete every stored program?")) return;
+  gcPost("/api/gcode/deleteall", "", "All programs deleted.");
+};
+
+document.getElementById("gcbrowse").onclick = function(){
+  document.getElementById("gcfile").click();
+};
+
+document.getElementById("gcfile").onchange = function(){
+  var f = this.files[0];
+  this.value = "";
+  if(!f) return;
+  // Streamed rather than read into the page first, so file size is bounded by the controller's
+  // filesystem and not by what the browser can hold.
+  var n = gcName.value.trim();
+  var fd = new FormData();
+  fd.append("gcode", f, f.name);
+  var xhr = new XMLHttpRequest();
+  gcProg.value = 0;
+  gcProg.hidden = false;
+  xhr.open("POST", "/api/gcode/upload" + (n ? "?name=" + encodeURIComponent(n) : ""));
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable) gcProg.value = (e.loaded / e.total) * 100;
+  };
+  xhr.onload = function(){
+    gcProg.hidden = true;
+    var r = {};
+    try { r = JSON.parse(xhr.responseText); } catch(err){}
+    gcSay(r.ok ? "Uploaded as " + r.name + "." : "Upload failed: " + (r.error || xhr.status));
+    gcLoad();
+  };
+  xhr.onerror = function(){
+    gcProg.hidden = true;
+    gcSay("Upload failed.");
+    gcLoad();
+  };
+  xhr.send(fd);
+};
+
+document.getElementById("gcbox").addEventListener("toggle", function(){
+  if(this.open) gcLoad();
+});
 
 // Settings first: it sets `metric`, which decides the units the derived table is written in.
 fetch("/api/settings").then(function(r){ return r.json(); }).then(function(d){

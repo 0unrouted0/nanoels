@@ -216,6 +216,9 @@ bool splashScreen = false;
 
 #include <Preferences.h>
 
+// Stored G-code programs. Owns gcodeProgramIndex and gcodeProgramCount.
+#include "gcode_store.h"
+
 // Access point, config UI and firmware updates. Always compiled in, but nothing is started unless
 // the "Enabled" item in Settings > WiFi & updates is on - see machine_config.h.
 #include <WiFi.h>
@@ -808,8 +811,6 @@ bool gcodeInSave = false;
 bool gcodeInSaveFirstLine = false;
 String gcodeSaveName = "";
 String gcodeSaveValue = "";
-int gcodeProgramIndex = 0;
-int gcodeProgramCount = 0;
 String gcodeProgram = "";
 int gcodeProgramCharIndex = 0;
 
@@ -1503,16 +1504,9 @@ void updateDisplay() {
       if (setupIndex == 1 && gcodeProgramCount == 0) {
         charIndex += lcd.print("No stored programs");
       } else if (setupIndex == 1) {
-        Preferences pref;
-        pref.begin(GCODE_NAMESPACE);
-        if (gcodeProgramIndex >= gcodeProgramCount) {
-          charIndex += lcd.print("Program deleted");
-        } else {
-          String programName = pref.getString(String(gcodeProgramIndex).c_str());
-          if (programName.length() == 0) charIndex += lcd.print("(empty name)");
-          else charIndex += lcd.print(programName.substring(0, 20));
-        }
-        pref.end();
+        String programName = gcodeNameAt(gcodeProgramIndex);
+        if (programName.length() == 0) charIndex += lcd.print("Program deleted");
+        else charIndex += lcd.print(programName.substring(0, 20));
       } else if (setupIndex == 2) {
         if (spindleStopped) charIndex += lcd.print("Turn on the spindle!");
         else charIndex += lcd.print("Spindle on. Go?");
@@ -2319,20 +2313,10 @@ void taskGcode(void *param) {
           if (saveGcode()) Serial.println("ok");
         } else if (gcodeSaveName.length() == 1) {
           Serial.println("error: name must be at least 2 chars");
+        } else if (gcodeDeleteByName(gcodeSaveName)) {
+          Serial.println("ok");
         } else {
-          Preferences pref;
-          pref.begin(GCODE_NAMESPACE);
-          bool found = false;
-          for (int i = 0; i < 256; i++) {
-            if (!pref.isKey(String(i).c_str())) break;
-            if (gcodeSaveName.equals(pref.getString(String(i).c_str()))) {
-              found = true;
-              if (removeGcode(i)) Serial.println("ok");
-              break;
-            }
-          }
-          if (!found) Serial.println("error: name not found");
-          pref.end();
+          Serial.println("error: name not found");
         }
         gcodeSaveName = "";
         gcodeSaveValue = "";
@@ -2386,71 +2370,53 @@ void taskGcode(void *param) {
 }
 
 bool saveGcode() {
-  Preferences pref;
-  pref.begin(GCODE_NAMESPACE);
-  bool success = false;
-  if (gcodeSaveName.length() < 2) {
-    Serial.println("error: name must be at least 2 chars");
-  } else if (gcodeSaveValue.length() < 2) {
-    Serial.println("error: program too short");
-  } else if (pref.freeEntries() < 2 || gcodeProgramCount >= 256) {
-    Serial.println("error: memory full");
-  } else if (pref.isKey(gcodeSaveName.c_str())) {
-    if (pref.putString(gcodeSaveName.c_str(), gcodeSaveValue) != gcodeSaveValue.length()) {
-      Serial.println("error: failed to overwrite");
-    } else {
-      success = true;
-    }
-  } else {
-    if (pref.putString(String(gcodeProgramCount).c_str(), gcodeSaveName) == 0) {
-      Serial.println("error: not enough memory for program name");
-    } else if (pref.putString(gcodeSaveName.c_str(), gcodeSaveValue) != gcodeSaveValue.length()) {
-      pref.remove(String(gcodeProgramCount).c_str());
-      Serial.println("error: not enough memory for program text");
-    } else {
-      gcodeProgramCount++;
-      success = true;
-    }
-  }
-  pref.end();
-  return success;
+  const char* err = gcodeWriteProgram(gcodeSaveName, gcodeSaveValue);
+  if (err == NULL) return true;
+  Serial.print("error: ");
+  Serial.println(err);
+  return false;
 }
 
 bool removeGcode(int indexToRemove) {
-  Preferences pref;
-  pref.begin(GCODE_NAMESPACE);
-  bool success = false;
-  if (indexToRemove >= 0 && indexToRemove < 256 && pref.isKey(String(indexToRemove).c_str())) {
-    success = true;
-    String programName = pref.getString(String(indexToRemove).c_str());
-    pref.remove(String(indexToRemove).c_str());
-    if (programName.length() > 0) {
-      pref.remove(programName.c_str());
-    }
-    // Move all the following program names down to avoid holes.
-    for (int i = indexToRemove + 1; pref.isKey(String(i).c_str()); i++) {
-      pref.putString(String(i - 1).c_str(), pref.getString(String(i).c_str()));
-      pref.remove(String(i).c_str());
-    }
-    if (gcodeProgramCount > 0) gcodeProgramCount--;
-    if (gcodeProgramCount > 0 && gcodeProgramIndex >= gcodeProgramCount) {
-      gcodeProgramIndex = gcodeProgramCount - 1;
-    }
-  } else {
-    Serial.print("error: program to delete not found at index ");
-    Serial.println(indexToRemove);
-  }
-  pref.end();
-  return success;
+  if (gcodeDeleteByIndex(indexToRemove)) return true;
+  Serial.print("error: program to delete not found at index ");
+  Serial.println(indexToRemove);
+  return false;
 }
 
 bool removeAllGcode() {
+  if (gcodeDeleteAll()) return true;
+  Serial.println("error: failed to delete every program");
+  return false;
+}
+
+// One-time move of whatever the Preferences "gc" namespace still holds, so a controller upgrading
+// from before keeps its programs.
+void migrateGcodeFromPreferences() {
   Preferences pref;
   pref.begin(GCODE_NAMESPACE);
-  bool success = pref.clear();
-  if (!success) Serial.println("error: failed clearing GCODE_NAMESPACE");
+  if (!pref.isKey("0")) {
+    pref.end();
+    return;
+  }
+  int moved = 0;
+  int failed = 0;
+  for (int i = 0; i < 256; i++) {
+    if (!pref.isKey(String(i).c_str())) break;
+    String name = pref.getString(String(i).c_str());
+    // The old names were never checked against a character set, so they are mapped onto one the
+    // filesystem takes rather than refused - the namespace is cleared either way below.
+    String fileName = gcodeUniqueName(name, String("program") + (i + 1));
+    if (gcodeWriteProgram(fileName, pref.getString(name.c_str())) == NULL) moved++;
+    else failed++;
+  }
+  pref.clear();
   pref.end();
-  return true;
+  Serial.print("G-code: moved ");
+  Serial.print(moved);
+  Serial.print(" programs from NVS to LittleFS, ");
+  Serial.print(failed);
+  Serial.println(" could not be written");
 }
 
 // Full 4x quadrature decode, using both channels of the PCNT unit.
@@ -2850,17 +2816,6 @@ void setup() {
     DHIGH(a1.ena);
   }
 
-  pref.begin(GCODE_NAMESPACE);
-  gcodeProgramCount = 0;
-  for (int i = 0; i < 256; i++) {
-    if (pref.isKey(String(i).c_str())) {
-      gcodeProgramCount++;
-    } else {
-      break;
-    }
-  }
-  pref.end();
-
 #ifdef DISPLAY_I2C_EXPANDER
   // init() begins I2C_disp, so the pins have to be set first. The backlight is off after a reset.
   I2C_disp.setPins(DISP_SDA, DISP_SCL);
@@ -2872,6 +2827,15 @@ void setup() {
   lcdLoadNormalChars();
 
   Serial.begin(115200);
+
+  // After Serial, so a mount failure is reported rather than lost. Formats on first boot, which is
+  // what a controller upgrading from the Preferences-based storage needs.
+  if (!LittleFS.begin(true)) {
+    Serial.println("error: LittleFS mount failed, G-code storage unavailable");
+  } else {
+    migrateGcodeFromPreferences();
+    gcodeRefreshIndex();
+  }
 
   if (!I2C_keys.begin(KEYS_SDA, KEYS_SCL)) {
     Serial.println("I2C initialization failed");
@@ -3338,22 +3302,15 @@ void buttonOnOffPress(bool on) {
   } else if (!isOn && on && mode == MODE_GCODE && gcodeProgramIndex >= gcodeProgramCount) {
     beep();
   } else if (!isOn && on && mode == MODE_GCODE) {
-    Preferences pref;
-    pref.begin(GCODE_NAMESPACE);
-    if (!pref.isKey(String(gcodeProgramIndex).c_str())) {
+    String programName = gcodeNameAt(gcodeProgramIndex);
+    gcodeProgram = programName.length() > 0 ? gcodeReadProgram(programName) : "";
+    if (gcodeProgram.length() == 0) {
       beep();
     } else {
-      String programName = pref.getString(String(gcodeProgramIndex).c_str());
-      if (programName.length() == 0) {
-        beep();
-      } else {
-        gcodeProgramCharIndex = 0;
-        gcodeProgram = pref.getString(programName.c_str());
-        gcodeProgram += '\n'; // ensures the last line is executed
-        setIsOnFromTask(on);
-      }
+      gcodeProgramCharIndex = 0;
+      gcodeProgram += '\n'; // ensures the last line is executed
+      setIsOnFromTask(on);
     }
-    pref.end();
   } else {
     setIsOnFromTask(on);
   }
@@ -4648,6 +4605,145 @@ void handleDump() {
   webServer.send(200, "text/plain", settingsDumpText());
 }
 
+// ---------------------------------------------------------------------------
+// Stored G-code programs
+// ---------------------------------------------------------------------------
+
+String gcodeUploadError = "";
+String gcodeUploadName = "";
+File gcodeUploadFile;
+
+// Same guard the settings writes use, plus the firmware update - both write flash, and the running
+// program's file must not disappear from under it.
+bool gcodeChangeBlocked() {
+  return machineIsBusy() || otaInProgress;
+}
+
+void gcodeJsonError(int code, const String& message) {
+  webServer.send(code, "application/json", "{\"ok\":false,\"error\":\"" + jsonEscape(message.c_str()) + "\"}");
+}
+
+void handleGcodeList() {
+  String out = "{\"free\":" + String((unsigned long) gcodeFreeBytes());
+  out += ",\"total\":" + String((unsigned long) LittleFS.totalBytes());
+  out += ",\"max\":" + String(GCODE_MAX_PROGRAMS);
+  out += ",\"busy\":" + String(gcodeChangeBlocked() ? 1 : 0);
+  out += ",\"items\":[";
+  for (int i = 0; i < gcodeProgramCount; i++) {
+    if (i > 0) out += ",";
+    out += "{\"name\":\"" + jsonEscape(gcodeIndexNames[i].c_str()) +
+        "\",\"size\":" + String(gcodeSizeOf(gcodeIndexNames[i])) + "}";
+  }
+  out += "]}";
+  webServer.send(200, "application/json", out);
+}
+
+void handleGcodeGet() {
+  String name = webServer.arg("name");
+  if (!gcodeExists(name)) {
+    gcodeJsonError(404, "program not found");
+    return;
+  }
+  // Quoted because a name may contain spaces. It cannot contain a quote - see gcodeNameValid().
+  if (webServer.hasArg("download")) {
+    webServer.sendHeader("Content-Disposition", "attachment; filename=\"" + name + ".gcode\"");
+  }
+  webServer.send(200, "text/plain", gcodeReadProgram(name));
+}
+
+void handleGcodeSave() {
+  if (gcodeChangeBlocked()) {
+    gcodeJsonError(409, "machine is busy");
+    return;
+  }
+  if (!webServer.hasArg("name") || !webServer.hasArg("text")) {
+    gcodeJsonError(400, "expected name and text");
+    return;
+  }
+  const char* err = gcodeWriteProgram(webServer.arg("name"), webServer.arg("text"));
+  if (err == NULL) {
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    gcodeJsonError(400, err);
+  }
+}
+
+void handleGcodeDelete() {
+  if (gcodeChangeBlocked()) {
+    gcodeJsonError(409, "machine is busy");
+    return;
+  }
+  if (!webServer.hasArg("name")) {
+    gcodeJsonError(400, "expected name");
+    return;
+  }
+  if (gcodeDeleteByName(webServer.arg("name"))) {
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    gcodeJsonError(404, "program not found");
+  }
+}
+
+void handleGcodeDeleteAll() {
+  if (gcodeChangeBlocked()) {
+    gcodeJsonError(409, "machine is busy");
+    return;
+  }
+  if (gcodeDeleteAll()) {
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    gcodeJsonError(500, "failed to delete every program");
+  }
+}
+
+void handleGcodeUploadDone() {
+  if (gcodeUploadError.length() > 0) {
+    gcodeJsonError(gcodeUploadError == "machine is busy" ? 409 : 400, gcodeUploadError);
+    return;
+  }
+  webServer.send(200, "application/json",
+      "{\"ok\":true,\"name\":\"" + jsonEscape(gcodeUploadName.c_str()) + "\"}");
+}
+
+// Written to the file as it arrives rather than buffered, so the size that can be uploaded is
+// limited by the filesystem rather than by free heap.
+void handleGcodeUpload() {
+  HTTPUpload& up = webServer.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    gcodeUploadError = "";
+    gcodeUploadName = webServer.hasArg("name") ? webServer.arg("name")
+                                               : gcodeNameFromFilename(up.filename);
+    if (gcodeChangeBlocked()) {
+      gcodeUploadError = "machine is busy";
+    } else if (!gcodeNameValid(gcodeUploadName)) {
+      gcodeUploadError = "name must be 2-24 chars: letters, digits, - _ space";
+    } else if (!gcodeExists(gcodeUploadName) && gcodeProgramCount >= GCODE_MAX_PROGRAMS) {
+      gcodeUploadError = "too many programs";
+    } else {
+      gcodeUploadFile = LittleFS.open(gcodePath(gcodeUploadName), "w");
+      if (!gcodeUploadFile) gcodeUploadError = "failed to open file";
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (gcodeUploadError.length() > 0 || !gcodeUploadFile) return;
+    if (gcodeUploadFile.write(up.buf, up.currentSize) != up.currentSize) {
+      gcodeUploadError = "not enough space";
+    }
+  } else if (up.status == UPLOAD_FILE_END || up.status == UPLOAD_FILE_ABORTED) {
+    if (up.status == UPLOAD_FILE_ABORTED) gcodeUploadError = "upload aborted";
+    if (gcodeUploadFile) {
+      if (gcodeUploadError.length() == 0 && gcodeUploadFile.size() < 2) {
+        gcodeUploadError = "program too short";
+      }
+      gcodeUploadFile.close();
+    }
+    // A half-written file would be offered in the list and run as if it were whole.
+    if (gcodeUploadError.length() > 0 && gcodeNameValid(gcodeUploadName)) {
+      LittleFS.remove(gcodePath(gcodeUploadName));
+    }
+    gcodeRefreshIndex();
+  }
+}
+
 // Answers the upload POST once the body has been consumed by handleUpdateUpload().
 void handleUpdateDone() {
   if (otaError.length() > 0) {
@@ -4757,6 +4853,12 @@ void startWebServer() {
     webServer.on("/api/derived", HTTP_GET, handleDerivedJson);
     webServer.on("/api/setting", HTTP_POST, handleSettingWrite);
     webServer.on("/api/dump", HTTP_GET, handleDump);
+    webServer.on("/api/gcode/list", HTTP_GET, handleGcodeList);
+    webServer.on("/api/gcode/get", HTTP_GET, handleGcodeGet);
+    webServer.on("/api/gcode/save", HTTP_POST, handleGcodeSave);
+    webServer.on("/api/gcode/delete", HTTP_POST, handleGcodeDelete);
+    webServer.on("/api/gcode/deleteall", HTTP_POST, handleGcodeDeleteAll);
+    webServer.on("/api/gcode/upload", HTTP_POST, handleGcodeUploadDone, handleGcodeUpload);
     webServer.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
     webRoutesRegistered = true;
   }
