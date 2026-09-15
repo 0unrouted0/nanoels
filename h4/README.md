@@ -86,23 +86,46 @@ To enable, set `JOYSTICK_USE = true` near the top of `h4.ino` and re-upload the 
 
 ## Programming the controller
 
+### Build
+
+#### PlatformIO
+
+The main advantage of PlatformIO is that the platform, framework and library dependencies are defined in `platformio.ini`. This binds the required versions more precisely, makes builds reproducible and avoids depending on libraries that happen to be installed on the computer in different versions.
+
+- Download and install [Visual Studio Code](https://code.visualstudio.com/)
+- Open VS Code and install the [PlatformIO IDE extension](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide). The required Microsoft C/C++ tools are installed automatically as part of the setup
+- If VS Code asks for it, switch the workspace to Trust mode
+- Open the `software` folder, which contains `platformio.ini`
+- PlatformIO reads `platformio.ini` and automatically installs the configured platform, Arduino framework and library dependencies
+- Check the top constants (e.g. encoder steps, motor steps, display offset) in `src/machine_config.h` (maybe add a new config in ./configs/ folder) and adjust if needed
+
+#### Arduino IDE
+
 - Install the [Arduino IDE](https://docs.arduino.cc/software/ide-v2)
 - Add `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` in [Preferences as "Additional board manager URLs"](https://github.com/kachurovskiy/nanoels/assets/517919/dcc023e6-20fc-4284-ba56-d466dbe4ce53)
 - Install `esp32` [via Board Manager](https://github.com/kachurovskiy/nanoels/assets/517919/094d00ff-1e51-4f26-bb81-aa4ad42bde2a)
 - Install Adafruit `TCA8418` library [via Library Manager](https://github.com/kachurovskiy/nanoels/assets/517919/90326e0d-6600-4b47-aa66-1177c4b9cc27)
 - Download [this repository](https://github.com/kachurovskiy/nanoels/archive/refs/heads/main.zip), unzip, go to `h4` directory and open `h4.ino` file in the Arduino IDE
 - Check the top constants (e.g. encoder steps, motor steps, display offset) and adjust if needed
-- Select "ESP32S3 Dev Module" as device at the top, pick COM port that appears when you connect the device with a USB cable
-- Upload the sketch to your H4 controller
+
+
+### Upload
+
+- Connect the H4 controller with a USB cable and select the COM port that appears when you connect the device
+- For Arduino IDE, select "ESP32S3 Dev Module" as the device and upload the sketch
+- For PlatformIO, select the `esp32-s3-devkitc-1` environment and use the Upload command
+- The very first upload has to be over USB
+
+After the first cable upload you can install later versions over WiFi instead — see
+[WIFI.md](WIFI.md). The partition layout already has two application slots, so no change to the
+board settings is needed.
+
+### After upload
 
 A few things to check after upload:
 
 - Spindle direction: show angle on screen using ![IconDisplay](https://github.com/kachurovskiy/nanoels/assets/517919/60bb723d-4c2d-45af-9208-95c2b26a42d1). Rotate the chuck forward manually - angle should increase. If it decreases, swap `ENCB` and `ENCA` wires in the terminal
-- Motor direction: try ![IconArrowLeft](https://github.com/kachurovskiy/nanoels/assets/517919/d110519a-6cf4-491e-b81a-c09aefa49e49) ![IconArrowRight](https://github.com/kachurovskiy/nanoels/assets/517919/48a0327e-0cc4-465e-b371-644f153f3288) ![IconArrowUp](https://github.com/kachurovskiy/nanoels/assets/517919/ac350635-4424-4438-bcfb-3cb0431345f8) ![IconArrowDown](https://github.com/kachurovskiy/nanoels/assets/517919/897b4005-45d0-46ed-977e-b25a98983961) buttons - if motor is moving in the wrong direction, change `INVERT_Z` or `INVERT_X` in the code, re-upload the sketch (or swap the motor leads `A+` and `A-` in the stepper driver)
-
-After the first cable upload you can install later versions over WiFi instead — see
-[WIFI.md](WIFI.md). The partition layout already has two application slots, so no change to the
-board settings is needed. The very first upload has to be over USB.
+- Motor direction: try ![IconArrowLeft](https://github.com/kachurovskiy/nanoels/assets/517919/d110519a-6cf4-491e-b81a-c09aefa49e49) ![IconArrowRight](https://github.com/kachurovskiy/nanoels/assets/517919/48a0327e-0cc4-465e-b371-644f153f3288) ![IconArrowUp](https://github.com/kachurovskiy/nanoels/assets/517919/ac350635-4424-4438-bcfb-3cb0431345f8) ![IconArrowDown](https://github.com/kachurovskiy/nanoels/assets/517919/897b4005-45d0-46ed-977e-b25a98983961) buttons - if motor is moving in the wrong direction, change `INVERT_Z` or `INVERT_X` in the code, then re-upload the sketch (or swap the motor leads `A+` and `A-` in the stepper driver)
 
 Troubleshooting:
 
