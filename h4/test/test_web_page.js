@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const header = fs.readFileSync(path.join(__dirname, '..', 'web_page.h'), 'utf8');
+const header = fs.readFileSync(path.join(__dirname, '..', 'src', 'web_page.h'), 'utf8');
 const block = /<script>\s*([\s\S]*?)\s*<\/script>/.exec(header);
 if (!block) {
   console.error('No <script> block found in web_page.h');

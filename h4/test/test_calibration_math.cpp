@@ -5,17 +5,17 @@
 
 #include <cstdio>
 #include <cstring>
-#include "../calibration_math.h"
-#include "../settings_table.h"
-#include "../pass_math.h"
-#include "../encoder_health.h"
-#include "../beeper.h"
-#include "../aux_pins.h"
-#include "../indexing.h"
-#include "../mode_settings.h"
-#include "../modes.h"
-#include "../lcd_line.h"
-#include "../setup_line.h"
+#include "../src/calibration_math.h"
+#include "../src/settings_table.h"
+#include "../src/pass_math.h"
+#include "../src/encoder_health.h"
+#include "../src/beeper.h"
+#include "../src/aux_pins.h"
+#include "../src/indexing.h"
+#include "../src/mode_settings.h"
+#include "../src/modes.h"
+#include "../src/lcd_line.h"
+#include "../src/setup_line.h"
 
 static int checks = 0;
 static int failures = 0;
