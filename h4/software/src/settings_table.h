@@ -229,12 +229,17 @@ const SettingDesc SETTINGS[] = {
   {"Debounce",           SETTING_GLOBAL_NUM,  "jdb",  SEC_JOYSTICK, SAX_NONE, SMODE_NONE, 0, 0, "ms"},
 
   // -- WiFi and updates ---------------------------------------------------
-  // Both take effect immediately: the radio follows the toggle, and changing the PIN cycles a
-  // running access point so it picks the new one up. The PIN is the WPA2 password and must be
+  // All of these take effect immediately: the radio follows the toggle, and anything it was
+  // started with cycles it so the new value is picked up. The PIN is the WPA2 password and must be
   // exactly 8 digits - see machine_config.h. It is a code rather than a measurement, so it
   // genuinely has no unit.
+  //
+  // Which network to join is not here: there is no way to type a name on a numeric keypad, so it
+  // is chosen in the browser. All the panel can do is forget it again.
   {"Enabled",            SETTING_GLOBAL_BOOL, "wfen", SEC_WIFI, SAX_NONE, SMODE_NONE, "yes", "no", 0},
   {"Access PIN",         SETTING_GLOBAL_NUM,  "wfpw", SEC_WIFI, SAX_NONE, SMODE_NONE, 0, 0, 0},
+  {"Join timeout",       SETTING_GLOBAL_NUM,  "wfto", SEC_WIFI, SAX_NONE, SMODE_NONE, 0, 0, "s"},
+  {"Forget network",     SETTING_ACTION,      "wffg", SEC_WIFI, SAX_NONE, SMODE_NONE, 0, 0, 0},
 
   // -- Per-mode ------------------------------------------------------------
   // Reached by a short press of the settings button, which opens the page for whichever mode is

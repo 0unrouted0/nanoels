@@ -21,34 +21,68 @@ if (!block) {
 function el() {
   return {
     style: {}, dataset: {}, children: [], textContent: '', innerHTML: '', value: '', type: '',
-    className: '', inputMode: '',
+    className: '', inputMode: '', id: '', maxLength: 0, placeholder: '',
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild(c) { this.children.push(c); return c; },
     insertBefore(c) { this.children.push(c); return c; },
     addEventListener() {},
+    querySelectorAll() { return []; },
+    focus() {},
+    remove() {},
     get nextElementSibling() { return null; },
     get parentNode() { return el(); },
   };
 }
 
 let strip = null;
+// Looked up by id and kept, the way a real document does: the page marks the settings host to
+// remember it has already drawn the unlock row, and a fresh node every time would hide that.
+const byId = {};
 global.document = {
   hidden: false,
   body: el(), // refreshBar() marks it while there are unsaved edits
-  createElement: () => el(),
+  // Registering on id assignment rather than on insertion: near enough, and it lets a test reach
+  // a node the page built for itself.
+  createElement() {
+    const e = el();
+    Object.defineProperty(e, 'id', {
+      get() { return e._id || ''; },
+      set(v) { e._id = v; byId[v] = e; },
+      configurable: true,
+    });
+    return e;
+  },
+  createDocumentFragment: () => el(),
+  querySelector: () => null,
   addEventListener: () => {},
   getElementById(id) {
+    if (byId[id]) return byId[id];
     const e = el();
     if (id === 'strip') {
       Object.defineProperty(e, 'innerHTML', {
         get() { return strip; }, set(v) { strip = v; }, configurable: true,
       });
     }
+    byId[id] = e;
     return e;
   },
 };
 global.window = global;
-global.fetch = () => new Promise(() => {});
+
+// Routed by path, because the page now fetches several endpoints and which one answers what is
+// part of what these tests are checking. An unrouted path never resolves, which is how a request
+// the test does not care about stays out of the way.
+let routes = {};
+global.fetch = (url) => {
+  const r = routes[String(url).split('?')[0]];
+  if (r === undefined) return new Promise(() => {});
+  return Promise.resolve({
+    status: r.httpStatus || 200,
+    ok: (r.httpStatus || 200) < 400,
+    json: () => Promise.resolve(r),
+    text: () => Promise.resolve(''),
+  });
+};
 global.setInterval = () => 0;
 global.setTimeout = () => 0;
 global.FormData = class { append() {} };
@@ -59,7 +93,7 @@ global.XMLHttpRequest = class {
 
 const mod = { exports: {} };
 new Function('module', 'exports', block[1] +
-  '\nmodule.exports = {fmtSpeed,speedToStored,parseCount,unitText,speedUnit,fmtDu,parseDu,status,makeRow,render};'
+  '\nmodule.exports = {fmtSpeed,speedToStored,parseCount,unitText,speedUnit,fmtDu,parseDu,status,makeRow,render,wfShow,unlock};'
 )(mod, mod.exports);
 const page = mod.exports;
 
@@ -140,7 +174,12 @@ const items = [
   { kind: 'du', label: 'Backlash', key: 'Zbla', value: 6500 },
   { kind: 'speed', label: 'Manual speed', key: 'css', value: 120 },
 ];
-page.render({ version: 'H4 V16', metric: 1, sections: [{ name: 'Test', items: items }] });
+const settingsPayload = {
+  version: 'H4 V16', metric: 1,
+  sections: [{ name: 'Test', items: items }, { name: 'WiFi & updates', items: [] }],
+};
+routes['/api/settings'] = settingsPayload;
+page.render(settingsPayload);
 eq('metric distance', items[0].row.children[1].value, '0.65');
 eq('metric speed unit', items[1].row.children[2].textContent, 'm/min');
 
@@ -148,6 +187,7 @@ const inchPayload = {
   on: 0, busy: 0, mode: '', rpm: 0, z: 0, x: 0, a1: 0, surface: 0, targetRpm: 0,
   coherence: -1, worstCoherence: -1, dirtyWindows: 0, flips: 0, coherenceFloor: 95,
   a1active: 0, dia: 0, measure: 1, pitch: 0, uptime: 1,
+  wifiLink: 'ap', wifiSsid: 'NanoEls-H4', wifiIp: '192.168.4.1', locked: 0,
 };
 group('status strip');
 const payload = {
@@ -155,6 +195,7 @@ const payload = {
   diameterDu: 508000, surface: 98, wanted: 120, material: 'Mild steel', targetRpm: 620,
   coherence: 100, worstCoherence: 96, dirtyWindows: 0, flips: 0, coherenceFloor: 95,
   a1active: 0, dia: 1, measure: 0, pitch: 20000, uptime: 42,
+  wifiLink: 'ap', wifiSsid: 'NanoEls-H4', wifiIp: '192.168.4.1', locked: 0,
 };
 const chipOf = (text) => '<span' + strip.split('<span').find((c) => c.includes(text));
 
@@ -162,13 +203,18 @@ const chipOf = (text) => '<span' + strip.split('<span').find((c) => c.includes(t
 // rather than nested callbacks: the order these run in is the point, and one payload mutating
 // under another's pending promise is exactly the sort of test bug that reads as a code bug.
 function poll(next) {
-  global.fetch = () => Promise.resolve({ json: () => Promise.resolve(next) });
+  routes['/api/status'] = next;
   strip = null;
   page.status();
   return new Promise((resolve) => setImmediate(resolve));
 }
 
 (async () => {
+  // The settings are not fetched until a status reply says they may be, so the first poll is what
+  // brings the page up at all.
+  await poll(payload);
+  ok('the settings arrive once the status allows it', items[0].row !== undefined);
+
   // Switching the panel to inches has to repaint the values and the unit labels together.
   await poll(inchPayload);
   eq('the distance follows into inches', items[0].row.children[1].value, '0.02559');
@@ -211,6 +257,41 @@ function poll(next) {
   ok('no target, no chip', !strip.includes('Mild steel'));
   ok('no diameter, no cutting speed', !strip.includes('m/min'));
   ok('the rest of the strip survives', strip.includes('200'));
+
+  group('which network the page came in over');
+  // The same document is served on the machine's own access point and on a house network, and
+  // which one it is decides whether anything on it is protected - so it has to be visible.
+  ok('the access point address is shown', chipOf('192.168.4.1').includes('ap'));
+  payload.wifiLink = 'sta';
+  payload.wifiSsid = 'Workshop';
+  payload.wifiIp = '192.168.1.44';
+  await poll(payload);
+  ok('so is a home network address', chipOf('192.168.1.44').includes('net'));
+
+  group('the scan list');
+  // A network name is a stranger's string. It reaches the page as data and must leave it as data.
+  page.wfShow([{ ssid: '<img src=x onerror=alert(1)>', rssi: -55, enc: 1 }]);
+  const listed = document.getElementById('wflist').children;
+  eq('one button per network', listed.length, 1);
+  ok('the name is text, never markup', listed[0].textContent.includes('<img src=x'));
+  ok('and it is not in the page as HTML', document.getElementById('wflist').innerHTML === '');
+
+  group('the lock');
+  // Only ever seen on a house network. The chips and the banner keep running behind it: knowing
+  // what the machine is doing is not what the PIN protects.
+  routes['/api/settings'] = { httpStatus: 401 };
+  page.unlock('00000000');
+  await new Promise((resolve) => setImmediate(resolve));
+  eq('a refused PIN leaves the page locked', document.getElementById('settings').dataset.lock, '1');
+  ok('and says so', document.getElementById('pinnote').textContent.includes('not accepted'));
+
+  routes['/api/settings'] = settingsPayload;
+  page.unlock('13572468');
+  await new Promise((resolve) => setImmediate(resolve));
+  eq('the right one opens it', document.getElementById('settings').dataset.lock, '0');
+
+  await poll(payload);
+  ok('the strip kept running throughout', strip.includes('200'));
 
   console.log(`\n${checks} checks, ${failures} failures`);
   process.exit(failures === 0 ? 0 : 1);

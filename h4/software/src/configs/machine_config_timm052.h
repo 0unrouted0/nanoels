@@ -286,17 +286,29 @@ const long DELAY_BETWEEN_STEPS_MS = 80; // Time in milliseconds to wait between 
 // installed from a phone or laptop with no router involved. See WIFI.md.
 //
 // Off unless you turn it on, in Settings > WiFi & updates. While off there is no radio and no
-// extra task, and the controller behaves exactly as it did before this existed. The radio is only
-// started during setup(), so enabling it takes a restart.
+// extra task, and the controller behaves exactly as it did before this existed.
 //
-// The network name is fixed. The password is an 8-digit PIN, because it is stored through the
-// settings table, which holds numbers - WPA2 needs at least 8 characters, so the settings menu
-// refuses anything that is not exactly 8 digits. CHANGE IT: anyone who can join the network can
-// reflash the machine.
+// It can also join an existing network instead: pick one in the browser, and from then on every
+// start tries that network first and falls back to its own access point if the router does not
+// answer within WIFI_STA_TIMEOUT_S. The panel can forget the network again.
+//
+// The access point's name is fixed. The password is an 8-digit PIN, because it is stored through
+// the settings table, which holds numbers - WPA2 needs at least 8 characters, so the settings menu
+// refuses anything that is not exactly 8 digits. On a home network, where the machine is no longer
+// behind that PIN, the same PIN is what the page asks for before it will change anything.
+// CHANGE IT: anyone who gets past it can reflash the machine.
+//
+// The router password is kept in NVS, which is plain text in flash. Anyone who can unsolder or
+// simply read out the chip can recover it - use a guest network if that matters.
 #define WIFI_SSID "NanoEls-H4"
 #define WIFI_CHANNEL 1
 const bool WIFI_ENABLED = false;
 const long WIFI_PIN_DEFAULT = 13572468;
+// Reachable as http://WIFI_HOSTNAME.local/ on either network, so the IP need not be read off the
+// LCD. Apple devices and Windows 10+ resolve it out of the box; older Android does not.
+#define WIFI_HOSTNAME "nanoels"
+#define WIFI_AUTH_USER "nanoels"
+const long WIFI_STA_TIMEOUT_S = 15;
 
 // ---------------------------------------------------------------------------
 // Keypad

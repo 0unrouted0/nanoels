@@ -222,6 +222,7 @@ bool splashScreen = false;
 // Access point, config UI and firmware updates. Always compiled in, but nothing is started unless
 // the "Enabled" item in Settings > WiFi & updates is on - see machine_config.h.
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <WebServer.h>
 #include <Update.h>
 #include "web_page.h"
@@ -654,12 +655,20 @@ bool xDiameterDisplay = false; // Show and enter X values as diameter instead of
 // turned off: the check is only as good as the max travel figures it measures against.
 bool estopTravelEnabled = true;
 
-// WiFi access point and over-the-air updates. Read once during setup(), so changing wifiEnabled
-// takes a restart - the settings item says so.
+// WiFi and over-the-air updates. The radio follows wifiEnabled, and comes up either joined to a
+// stored network or as its own access point.
 bool wifiEnabled = WIFI_ENABLED;
-long wifiPin = WIFI_PIN_DEFAULT; // WPA2 password, always exactly 8 digits
-bool wifiUp = false; // Whether the access point is actually running
-bool wifiRestart = false; // Set when the PIN changes, so a running access point picks it up
+long wifiPin = WIFI_PIN_DEFAULT; // WPA2 password for the access point, always exactly 8 digits
+bool wifiUp = false; // Whether the web server is actually running
+bool wifiRestart = false; // Set when something the radio was started with changes
+enum WifiLink { WLINK_OFF, WLINK_AP, WLINK_STA };
+WifiLink wifiLink = WLINK_OFF;
+String staSsid = "";  // Network to join at startup; empty means bring up the access point
+String staPass = "";
+long wifiStaTimeout = WIFI_STA_TIMEOUT_S; // How long to wait for the router before falling back
+// Set after joining a network from the browser: the access point stays up a moment longer so the
+// reply reaches the phone that is still connected to it.
+unsigned long wifiDropApAt = 0;
 // Set while firmware is being written. Flash writes disable the instruction cache and stall BOTH
 // cores, so no step pulse can be trusted for the duration - loop() bails out on this the same way
 // it does on an emergency stop.
@@ -2743,6 +2752,9 @@ void setup() {
   encoderInvert = pref.getBool(PREF_ENCODER_INVERT, encoderInvert);
   wifiEnabled = pref.getBool("wfen", WIFI_ENABLED);
   wifiPin = pref.getLong("wfpw", WIFI_PIN_DEFAULT);
+  staSsid = pref.getString("wfss", "");
+  staPass = pref.getString("wfpp", "");
+  wifiStaTimeout = pref.getLong("wfto", WIFI_STA_TIMEOUT_S);
 
   // Now that both the axes and the stored device flags exist, wire up the aux terminals. A stored
   // setup that predates the conflict check can have two devices claiming the same pins, so drop
@@ -4061,6 +4073,7 @@ long settingsReadValue(int index) {
   if (!strcmp(k, "p2a")) return pulse2DrivesX ? 1 : 0;
   if (!strcmp(k, "wfen")) return wifiEnabled ? 1 : 0;
   if (!strcmp(k, "wfpw")) return wifiPin;
+  if (!strcmp(k, "wfto")) return wifiStaTimeout;
   return 0;
 }
 
@@ -4263,6 +4276,9 @@ const char* settingsWriteValue(int index, long value) {
     // A live access point keeps the password it was started with, so cycle it to pick up the new
     // one. Anyone currently connected is dropped, which is the point of changing it.
     wifiRestart = true;
+  } else if (!strcmp(k, "wfto")) {
+    if (value < 5 || value > 120) return "Must be 5 to 120";
+    wifiStaTimeout = value;
   } else {
     return "Not a stored setting";
   }
@@ -4435,6 +4451,27 @@ int settingSectionValueCount(int section) {
   return n;
 }
 
+// On its own access point the WPA2 PIN is already the gate, and asking for it twice would only
+// teach the operator to ignore it. On a home network there is no gate at all, so the same PIN is
+// asked for here - over plain HTTP, so it keeps the household out, not someone with a packet
+// capture. Reading the machine's state is left open either way; everything that changes it, and
+// everything that would hand out the PIN itself, is not.
+bool webAuthNeeded() {
+  return wifiLink == WLINK_STA;
+}
+
+// Split in two because an upload handler is called mid-body, where sending a 401 would corrupt the
+// exchange: it records a refusal instead and lets the handler that answers the POST report it.
+bool webAuthPassed() {
+  return !webAuthNeeded() || webServer.authenticate(WIFI_AUTH_USER, String(wifiPin).c_str());
+}
+
+bool webAuthOk() {
+  if (webAuthPassed()) return true;
+  webServer.requestAuthentication(BASIC_AUTH, "NanoEls", "");
+  return false;
+}
+
 void handleRoot() {
   webServer.send_P(200, "text/html", WEB_PAGE);
 }
@@ -4448,6 +4485,7 @@ void handleRoot() {
 // truncates the body; the page's fetch then fails to parse it and shows no settings at all, with
 // nothing anywhere saying why. One write either succeeds or fails visibly.
 void handleSettingsJson() {
+  if (!webAuthOk()) return; // carries the access PIN, which is also the password asked for here
   String out;
   out.reserve(9000); // measured at ~7.6kB for the full table, so this should not reallocate
   out += "{\"version\":\"H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) +
@@ -4542,6 +4580,16 @@ void handleStatusJson() {
   out += ",\"measure\":" + String(measure);
   out += ",\"pitch\":" + String(dupr);
   out += ",\"uptime\":" + String(millis() / 1000);
+  // Which network the machine is on, and whether this visitor may change anything. Open to
+  // everyone: none of it is a secret, and a page that cannot say where the machine is would be a
+  // poor thing to land on.
+  out += ",\"wifiLink\":\"" + String(wifiLink == WLINK_STA ? "sta" : "ap") + "\"";
+  out += ",\"wifiSsid\":\"" + jsonEscape(wifiLink == WLINK_STA ? staSsid.c_str() : WIFI_SSID) + "\"";
+  out += ",\"wifiIp\":\"" + wifiAddress() + "\"";
+  out += ",\"wifiHost\":\"" WIFI_HOSTNAME ".local\"";
+  out += ",\"wifiUser\":\"" WIFI_AUTH_USER "\"";
+  out += ",\"wifiRssi\":" + String(wifiLink == WLINK_STA ? WiFi.RSSI() : 0);
+  out += ",\"locked\":" + String(webAuthPassed() ? 0 : 1);
   out += "}";
   webServer.send(200, "application/json", out);
 }
@@ -4586,6 +4634,7 @@ void handleDerivedJson() {
 }
 
 void handleSettingWrite() {
+  if (!webAuthOk()) return;
   if (!webServer.hasArg("key") || !webServer.hasArg("value")) {
     webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"expected key and value\"}");
     return;
@@ -4601,8 +4650,101 @@ void handleSettingWrite() {
 }
 
 void handleDump() {
+  if (!webAuthOk()) return; // the access PIN is one of the lines in it
   webServer.sendHeader("Content-Disposition", "attachment; filename=nanoels-settings.txt");
   webServer.send(200, "text/plain", settingsDumpText());
+}
+
+// ---------------------------------------------------------------------------
+// Joining a network
+// ---------------------------------------------------------------------------
+//
+// Only over HTTP: a network name cannot be typed on a numeric keypad. The panel can turn the radio
+// off and forget the network again, which is all it needs to be able to do.
+
+// Asynchronous, and polled by the page. A blocking scan takes seconds, during which this task
+// answers nothing - including the request that asked for the scan.
+void handleWifiScan() {
+  if (!webAuthOk()) return; // what is in range is the neighbourhood's business, not the guest's
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) {
+    webServer.send(200, "application/json", "{\"busy\":1,\"items\":[]}");
+    return;
+  }
+  if (n == WIFI_SCAN_FAILED) {
+    // Scanning needs a station interface. Adding one alongside the access point rather than
+    // replacing it keeps the phone that asked for the scan connected.
+    if (wifiLink == WLINK_AP) WiFi.mode(WIFI_AP_STA);
+    WiFi.scanNetworks(true);
+    webServer.send(200, "application/json", "{\"busy\":1,\"items\":[]}");
+    return;
+  }
+  String out = "{\"busy\":0,\"items\":[";
+  int shown = 0;
+  for (int i = 0; i < n; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) continue;
+    // A mesh answers on every one of its access points, and the list is the same network over and
+    // over. Results come back strongest first, so the first entry is the one worth keeping.
+    bool seen = false;
+    for (int j = 0; j < i && !seen; j++) seen = WiFi.SSID(j) == ssid;
+    if (seen) continue;
+    if (shown++ > 0) out += ",";
+    out += "{\"ssid\":\"" + jsonEscape(ssid.c_str()) + "\",\"rssi\":" + String(WiFi.RSSI(i)) +
+        ",\"enc\":" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? 0 : 1) + "}";
+  }
+  out += "]}";
+  WiFi.scanDelete();
+  webServer.send(200, "application/json", out);
+}
+
+void handleWifiConnect() {
+  if (!webAuthOk()) return;
+  if (machineIsBusy()) {
+    webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"machine is busy\"}");
+    return;
+  }
+  String ssid = webServer.arg("ssid");
+  String pass = webServer.arg("pass");
+  if (ssid.length() < 1 || ssid.length() > 32) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"expected a network name\"}");
+    return;
+  }
+  // The access point stays up through the attempt, so a failure costs the operator nothing: the
+  // phone that sent this is still on it and gets to read the error. Changing from one network to
+  // another has no such safety net, so that attempt puts the old network back if it fails.
+  bool fromAp = wifiLink == WLINK_AP;
+  WiFi.scanDelete();
+  if (fromAp) WiFi.mode(WIFI_AP_STA);
+  WiFi.setHostname(WIFI_HOSTNAME);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  unsigned long deadline = millis() + (unsigned long) wifiStaTimeout * 1000;
+  while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+    vTaskDelay(250 / portTICK_PERIOD_MS);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect(true);
+    if (fromAp) {
+      WiFi.mode(WIFI_AP);
+    } else {
+      WiFi.begin(staSsid.c_str(), staPass.c_str());
+    }
+    webServer.send(200, "application/json",
+        "{\"ok\":false,\"error\":\"the network did not answer - wrong password, or out of range\"}");
+    return;
+  }
+  wifiSaveSta(ssid, pass);
+  wifiLink = WLINK_STA;
+  wifiStartMdns();
+  if (fromAp) wifiDropApAt = millis() + 5000;
+  webServer.send(200, "application/json",
+      "{\"ok\":true,\"ip\":\"" + WiFi.localIP().toString() + "\",\"host\":\"" WIFI_HOSTNAME ".local\"}");
+}
+
+void handleWifiForget() {
+  if (!webAuthOk()) return;
+  wifiForgetSta();
+  webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
 // ---------------------------------------------------------------------------
@@ -4624,6 +4766,7 @@ void gcodeJsonError(int code, const String& message) {
 }
 
 void handleGcodeList() {
+  if (!webAuthOk()) return;
   String out = "{\"free\":" + String((unsigned long) gcodeFreeBytes());
   out += ",\"total\":" + String((unsigned long) LittleFS.totalBytes());
   out += ",\"max\":" + String(GCODE_MAX_PROGRAMS);
@@ -4639,6 +4782,7 @@ void handleGcodeList() {
 }
 
 void handleGcodeGet() {
+  if (!webAuthOk()) return;
   String name = webServer.arg("name");
   if (!gcodeExists(name)) {
     gcodeJsonError(404, "program not found");
@@ -4652,6 +4796,7 @@ void handleGcodeGet() {
 }
 
 void handleGcodeSave() {
+  if (!webAuthOk()) return;
   if (gcodeChangeBlocked()) {
     gcodeJsonError(409, "machine is busy");
     return;
@@ -4669,6 +4814,7 @@ void handleGcodeSave() {
 }
 
 void handleGcodeDelete() {
+  if (!webAuthOk()) return;
   if (gcodeChangeBlocked()) {
     gcodeJsonError(409, "machine is busy");
     return;
@@ -4685,6 +4831,7 @@ void handleGcodeDelete() {
 }
 
 void handleGcodeDeleteAll() {
+  if (!webAuthOk()) return;
   if (gcodeChangeBlocked()) {
     gcodeJsonError(409, "machine is busy");
     return;
@@ -4697,6 +4844,7 @@ void handleGcodeDeleteAll() {
 }
 
 void handleGcodeUploadDone() {
+  if (!webAuthOk()) return;
   if (gcodeUploadError.length() > 0) {
     gcodeJsonError(gcodeUploadError == "machine is busy" ? 409 : 400, gcodeUploadError);
     return;
@@ -4713,7 +4861,9 @@ void handleGcodeUpload() {
     gcodeUploadError = "";
     gcodeUploadName = webServer.hasArg("name") ? webServer.arg("name")
                                                : gcodeNameFromFilename(up.filename);
-    if (gcodeChangeBlocked()) {
+    if (!webAuthPassed()) {
+      gcodeUploadError = "unauthorized";
+    } else if (gcodeChangeBlocked()) {
       gcodeUploadError = "machine is busy";
     } else if (!gcodeNameValid(gcodeUploadName)) {
       gcodeUploadError = "name must be 2-24 chars: letters, digits, - _ space";
@@ -4746,6 +4896,7 @@ void handleGcodeUpload() {
 
 // Answers the upload POST once the body has been consumed by handleUpdateUpload().
 void handleUpdateDone() {
+  if (!webAuthOk()) return;
   if (otaError.length() > 0) {
     webServer.send(409, "application/json", "{\"ok\":false,\"error\":\"" + otaError + "\"}");
     otaInProgress = false;
@@ -4770,6 +4921,10 @@ void handleUpdateUpload() {
     otaError = "";
     otaWritten = false;
     otaKb = 0;
+    if (!webAuthPassed()) {
+      otaError = "unauthorized";
+      return;
+    }
     if (machineIsBusy()) {
       otaError = "machine is busy";
       return;
@@ -4834,18 +4989,81 @@ void updateOtaDisplay() {
 // every start would stack up duplicates each time the radio is cycled.
 bool webRoutesRegistered = false;
 
-void startWebServer() {
-  WiFi.mode(WIFI_AP);
+void wifiSaveSta(const String& ssid, const String& pass) {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.putString("wfss", ssid);
+  pref.putString("wfpp", pass);
+  pref.end();
+  staSsid = ssid;
+  staPass = pass;
+}
+
+void wifiForgetSta() {
+  Preferences pref;
+  pref.begin(PREF_NAMESPACE);
+  pref.remove("wfss");
+  pref.remove("wfpp");
+  pref.end();
+  staSsid = "";
+  staPass = "";
+  wifiRestart = true;
+}
+
+String wifiAddress() {
+  if (wifiLink == WLINK_STA) return WiFi.localIP().toString();
+  if (wifiLink == WLINK_AP) return WiFi.softAPIP().toString();
+  return "";
+}
+
+// Advertised on whichever network is up, so http://nanoels.local/ finds the machine without
+// anyone reading an address off the LCD.
+void wifiStartMdns() {
+  MDNS.end();
+  if (MDNS.begin(WIFI_HOSTNAME)) {
+    MDNS.addService("http", "tcp", 80);
+  }
+}
+
+bool wifiStartAp() {
   // softAP() takes the password as text and silently opens the network if it is under 8
   // characters, which is why the PIN is validated as exactly 8 digits when it is stored.
-  wifiUp = WiFi.softAP(WIFI_SSID, String(wifiPin).c_str(), WIFI_CHANNEL);
-  if (!wifiUp) {
+  if (!WiFi.softAP(WIFI_SSID, String(wifiPin).c_str(), WIFI_CHANNEL)) return false;
+  wifiLink = WLINK_AP;
+  return true;
+}
+
+// A stored network first, its own access point if that does not answer. Identical on every start:
+// a router that is merely switched off must not cost the operator the credentials.
+bool wifiStartRadio() {
+  wifiDropApAt = 0;
+  if (staSsid.length() > 0) {
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(WIFI_HOSTNAME); // ignored unless it is set before begin()
+    WiFi.begin(staSsid.c_str(), staPass.c_str());
+    unsigned long deadline = millis() + (unsigned long) wifiStaTimeout * 1000;
+    while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+      vTaskDelay(250 / portTICK_PERIOD_MS);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiLink = WLINK_STA;
+      return true;
+    }
+    WiFi.disconnect(true);
+  }
+  WiFi.mode(WIFI_AP);
+  return wifiStartAp();
+}
+
+void startWebServer() {
+  if (!wifiStartRadio()) {
     splashError("WiFi failed to start");
     // Leave the setting on but stop retrying every pass through the task: a failing softAP() in a
     // tight loop would starve everything else on this core.
     wifiEnabled = false;
     return;
   }
+  wifiUp = true;
   if (!webRoutesRegistered) {
     webServer.on("/", HTTP_GET, handleRoot);
     webServer.on("/api/settings", HTTP_GET, handleSettingsJson);
@@ -4853,6 +5071,9 @@ void startWebServer() {
     webServer.on("/api/derived", HTTP_GET, handleDerivedJson);
     webServer.on("/api/setting", HTTP_POST, handleSettingWrite);
     webServer.on("/api/dump", HTTP_GET, handleDump);
+    webServer.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
+    webServer.on("/api/wifi/connect", HTTP_POST, handleWifiConnect);
+    webServer.on("/api/wifi/forget", HTTP_POST, handleWifiForget);
     webServer.on("/api/gcode/list", HTTP_GET, handleGcodeList);
     webServer.on("/api/gcode/get", HTTP_GET, handleGcodeGet);
     webServer.on("/api/gcode/save", HTTP_POST, handleGcodeSave);
@@ -4863,14 +5084,19 @@ void startWebServer() {
     webRoutesRegistered = true;
   }
   webServer.begin();
-  splash(WIFI_SSID);
+  wifiStartMdns();
+  splash(wifiLink == WLINK_STA ? wifiAddress().c_str() : WIFI_SSID);
 }
 
 void stopWebServer() {
   webServer.stop();
+  MDNS.end();
   WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   wifiUp = false;
+  wifiLink = WLINK_OFF;
+  wifiDropApAt = 0;
   splash("WiFi off");
 }
 
@@ -4882,7 +5108,8 @@ void taskWeb(void *param) {
     // at the panel without a power cycle. While it is off nothing here touches WiFi at all, so a
     // machine that never enables it pays only for an idle task.
     if (wifiRestart && wifiUp) {
-      // The PIN changed underneath a running access point; it only takes effect on a fresh softAP.
+      // The PIN or the stored network changed underneath a running radio; both only take effect
+      // on a fresh start.
       stopWebServer();
     }
     wifiRestart = false;
@@ -4890,6 +5117,14 @@ void taskWeb(void *param) {
       startWebServer();
     } else if (!wifiEnabled && wifiUp) {
       stopWebServer();
+    }
+    // A network was joined from the browser while the access point was still up. Drop it now that
+    // the reply has had time to arrive, so the machine ends up where a restart would leave it.
+    if (wifiDropApAt != 0 && millis() > wifiDropApAt) {
+      wifiDropApAt = 0;
+      WiFi.softAPdisconnect(true);
+      WiFi.mode(WIFI_STA);
+      splash(wifiAddress().c_str());
     }
     if (wifiUp) {
       webServer.handleClient();
@@ -5019,6 +5254,9 @@ void processSettingsKeypress(int keyCode) {
         splashError("Turn off first");
       } else if (!strcmp(SETTINGS[settingsIndex].prefKey, "thr")) {
         enterSettingsScreen(true); // the thread database
+      } else if (!strcmp(SETTINGS[settingsIndex].prefKey, "wffg")) {
+        wifiForgetSta();
+        splash("Back to own AP");
       } else {
         enterCalScreen();
       }
@@ -5047,9 +5285,11 @@ void processSettingsKeypress(int keyCode) {
 long getSettingsValueHash() {
   if (settingsSection < 0) return settingsDirIndex * 31L + 7L;
   if (settingsIndex < 0 || settingsIndex >= SETTINGS_COUNT) return settingsSection * 7919L;
-  // wifiUp is in here because the WiFi section prints the address beside the value, and the access
-  // point can finish coming up after the screen has already been drawn.
-  return settingsReadValue(settingsIndex) * 3L + settingsIndex * 101L + (wifiUp ? 977L : 0L);
+  // The link is in here because the WiFi section prints the address beside the value, and the
+  // radio can finish coming up - or move from the access point to a network - after the screen
+  // has already been drawn.
+  return settingsReadValue(settingsIndex) * 3L + settingsIndex * 101L + wifiLink * 977L +
+      staSsid.length() * 13L;
 }
 
 void updateSettingsDisplay() {
@@ -5166,6 +5406,9 @@ void updateSettingsDisplay() {
         charIndex += lcd.print(unit);
       }
     }
+  } else if (SETTINGS[settingsIndex].section == SEC_WIFI) {
+    // Which network there is to forget. Naming it is the only confirmation this action gets.
+    charIndex = lcd.print(staSsid.length() > 0 ? staSsid.c_str() : "No network stored");
   } else {
     charIndex = lcd.print(CAL_ROUTINES_COUNT);
     charIndex += lcd.print(" routines");
@@ -5175,7 +5418,7 @@ void updateSettingsDisplay() {
   // column 9 leaves exactly the 11 columns an address needs, whereas "Now 13572468" beside the PIN
   // would leave three and wrap onto the line below.
   if (SETTINGS[settingsIndex].section == SEC_WIFI && wifiUp && settingIsToggle(settingsIndex)) {
-    String ip = WiFi.softAPIP().toString();
+    String ip = wifiAddress();
     if (charIndex + 1 + (int) ip.length() <= 20) {
       while (charIndex < 20 - (int) ip.length()) {
         charIndex += lcd.print(" ");
@@ -5189,7 +5432,14 @@ void updateSettingsDisplay() {
   if (splashActive()) {
     charIndex = lcd.print(splashBuf);
   } else if (settingIsAction(settingsIndex)) {
-    charIndex = lcd.print("ON to open");
+    charIndex = lcd.print(!strcmp(SETTINGS[settingsIndex].prefKey, "wffg") ? "ON to forget"
+                                                                          : "ON to open");
+  } else if (SETTINGS[settingsIndex].section == SEC_WIFI && settingIsToggle(settingsIndex) && wifiUp) {
+    // Whether the address above belongs to a network the machine joined or to its own access
+    // point, which is the difference between "anyone in the house can reach it" and "only whoever
+    // knows the PIN can".
+    charIndex = lcd.print(wifiLink == WLINK_STA ? "On " : "Own AP ");
+    charIndex += lcd.print(wifiLink == WLINK_STA ? staSsid.c_str() : WIFI_SSID);
   } else if (settingsIsToggle()) {
     charIndex = lcd.print("ON to toggle");
   } else if (settingIsList(settingsIndex)) {

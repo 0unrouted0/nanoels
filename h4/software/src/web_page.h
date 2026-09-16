@@ -426,6 +426,40 @@ textarea:focus {
 button.del {
   color: var(--bad);
 }
+
+/* Scan results. One button per network, wrapping, so a phone shows a few per line. */
+#wflist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  padding: 0 .9rem .6rem;
+}
+
+#wflist button {
+  padding: .25rem .5rem;
+  font-size: .82rem;
+}
+
+#wflist button[data-on="1"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#wfssid,
+#wfpass {
+  width: 10rem;
+  text-align: left;
+}
+
+#wfnow {
+  font-variant-numeric: tabular-nums;
+}
+
+#pin {
+  width: 8rem;
+  text-align: left;
+}
 </style>
 </head>
 <body>
@@ -503,6 +537,28 @@ button.del {
 var DU_MM = 10000, DU_IN = 254000;
 var metric = true, busy = false;
 
+// On the controller's own access point the WPA2 PIN is the gate and nothing is asked for here.
+// Joined to a house network there is no gate, so anything that changes the machine - or that would
+// hand out the PIN itself - wants it. Held in the page rather than left to the browser's own
+// dialog, which fetch() does not reliably raise.
+var authUser = "nanoels", authPin = "", locked = false, loaded = false, loading = false,
+    derivedOnce = false;
+
+function authFetch(url, opts){
+  opts = opts || {};
+  var h = opts.headers || {};
+  if(authPin) h["Authorization"] = "Basic " + btoa(authUser + ":" + authPin);
+  opts.headers = h;
+  return fetch(url, opts).then(function(r){
+    if(r.status === 401) relock();
+    return r;
+  });
+}
+
+function authHeader(xhr){
+  if(authPin) xhr.setRequestHeader("Authorization", "Basic " + btoa(authUser + ":" + authPin));
+}
+
 function fmtDu(v){
   if(metric) return (v/DU_MM).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") || "0";
   return (v/DU_IN).toFixed(5).replace(/0+$/,"").replace(/\.$/,"") || "0";
@@ -533,7 +589,7 @@ function parseCount(t){
 
 function post(key, value){
   var body = "key=" + encodeURIComponent(key) + "&value=" + encodeURIComponent(value);
-  return fetch("/api/setting", {
+  return authFetch("/api/setting", {
     method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded"},
     body:body
@@ -839,6 +895,135 @@ function loadDerived(){
     .then(renderDerived).catch(function(){});
 }
 
+// ---- joining a network --------------------------------------------------
+// Appended to the settings section it belongs to rather than given a section of its own: the
+// timeout and the PIN it works with are in that one, and a network is not a separate subject.
+// The panel has no way to type a network name, so this is the only place it can be picked.
+
+var wfSsid = null, wfPass = null, wfList = null, wfNote = null, wfNow = null;
+
+function wfSay(msg){ if(wfNote) wfNote.textContent = msg; }
+
+function wfBtn(text, cls, fn){
+  var b = document.createElement("button");
+  b.type = "button";
+  b.textContent = text;
+  if(cls) b.className = cls;
+  b.onclick = fn;
+  return b;
+}
+
+function wfBars(rssi){
+  if(rssi >= -60) return "\u25cf\u25cf\u25cf";
+  if(rssi >= -72) return "\u25cf\u25cf";
+  return "\u25cf";
+}
+
+function wfShow(items){
+  wfList.textContent = "";
+  if(items.length === 0){ wfSay("No networks found."); return; }
+  items.forEach(function(it){
+    // textContent, never markup: a name broadcast by a stranger's router is not ours to trust.
+    var b = wfBtn(it.ssid + " " + wfBars(it.rssi) + (it.enc ? "" : " open"), "", function(){
+      wfSsid.value = it.ssid;
+      wfList.querySelectorAll("button").forEach(function(o){ o.dataset.on = "0"; });
+      b.dataset.on = "1";
+      wfPass.focus();
+    });
+    wfList.appendChild(b);
+  });
+  wfSay("Pick a network, type its password, then Join.");
+}
+
+function wfPoll(tries){
+  authFetch("/api/wifi/scan").then(function(r){ return r.json(); }).then(function(d){
+    if(d.busy){
+      if(tries > 25){ wfSay("The scan did not finish."); return; }
+      setTimeout(function(){ wfPoll(tries + 1); }, 700);
+      return;
+    }
+    wfShow(d.items || []);
+  }).catch(function(){ wfSay("Could not scan."); });
+}
+
+function wfScan(){
+  wfSay("Scanning\u2026");
+  wfList.textContent = "";
+  wfPoll(0);
+}
+
+function wfConnect(){
+  var ssid = wfSsid.value.trim();
+  if(ssid.length < 1){ wfSay("Pick a network first, or type its name."); return; }
+  wfSay("Joining " + ssid + "\u2026 this takes a few seconds.");
+  authFetch("/api/wifi/connect", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:"ssid=" + encodeURIComponent(ssid) + "&pass=" + encodeURIComponent(wfPass.value)
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(!d.ok){ wfSay("Refused: " + (d.error || "unknown error")); return; }
+    wfPass.value = "";
+    // The access point goes away moments from now, so say where to look before the page's
+    // connection dies with it.
+    wfSay("Joined " + ssid + ". The machine is now at http://" + d.host + " or http://" + d.ip +
+          " on that network. This access point shuts down in a few seconds - reconnect your " +
+          "phone to the same network to carry on.");
+  }).catch(function(){ wfSay("Connection failed."); });
+}
+
+function wfForget(){
+  if(!confirm("Forget the stored network and go back to the machine's own access point?")) return;
+  authFetch("/api/wifi/forget", {method:"POST"})
+    .then(function(r){ return r.json(); })
+    .then(function(){ wfSay("Forgotten. The radio restarts as its own access point."); })
+    .catch(function(){ wfSay("Connection failed."); });
+}
+
+function wifiBlock(){
+  var frag = document.createDocumentFragment();
+
+  var row = document.createElement("div");
+  row.className = "row";
+  var lab = document.createElement("label");
+  lab.textContent = "Currently on";
+  wfNow = document.createElement("span");
+  wfNow.id = "wfnow";
+  row.appendChild(lab);
+  row.appendChild(wfNow);
+  frag.appendChild(row);
+
+  var pick = document.createElement("div");
+  pick.className = "tools";
+  pick.appendChild(wfBtn("Scan", "", wfScan));
+  wfSsid = document.createElement("input");
+  wfSsid.type = "text";
+  wfSsid.id = "wfssid";
+  wfSsid.placeholder = "Network";
+  wfSsid.maxLength = 32;
+  pick.appendChild(wfSsid);
+  wfPass = document.createElement("input");
+  wfPass.type = "password";
+  wfPass.id = "wfpass";
+  wfPass.placeholder = "Password";
+  wfPass.maxLength = 63;
+  pick.appendChild(wfPass);
+  pick.appendChild(wfBtn("Join", "", wfConnect));
+  pick.appendChild(wfBtn("Forget", "del", wfForget));
+  frag.appendChild(pick);
+
+  wfList = document.createElement("div");
+  wfList.id = "wflist";
+  frag.appendChild(wfList);
+
+  wfNote = document.createElement("p");
+  wfNote.className = "note";
+  wfNote.textContent = "Scan to see what is in range. Once joined, every restart tries that " +
+    "network first and falls back to the machine's own access point if it does not answer " +
+    "within the join timeout.";
+  frag.appendChild(wfNote);
+  return frag;
+}
+
 function render(data){
   document.getElementById("ver").textContent = data.version;
   metric = !!data.metric;
@@ -852,10 +1037,86 @@ function render(data){
     sum.textContent = sec.name;
     box.appendChild(sum);
     sec.items.forEach(function(it){ ALL.push(it); box.appendChild(makeRow(it)); });
+    if(sec.name === "WiFi & updates") box.appendChild(wifiBlock());
     s.appendChild(box);
     host.appendChild(s);
   });
   refreshBar();
+}
+
+// ---- the lock -----------------------------------------------------------
+// Only ever seen on a house network. The header, the status chips and the derived table stay live
+// throughout: knowing what the machine is doing is not what the PIN is protecting.
+
+function relock(){
+  authPin = "";
+  loaded = false;
+  loading = false;
+  ALL = [];
+  wfNow = null;
+  showLock("That PIN was not accepted.");
+}
+
+function showLock(msg){
+  var host = document.getElementById("settings");
+  if(host.dataset.lock === "1"){
+    if(msg) document.getElementById("pinnote").textContent = msg;
+    return;
+  }
+  host.dataset.lock = "1";
+  host.textContent = "";
+  var s = document.createElement("section");
+  var row = document.createElement("div");
+  row.className = "row";
+  var lab = document.createElement("label");
+  lab.textContent = "Access PIN";
+  var inp = document.createElement("input");
+  inp.type = "password";
+  inp.id = "pin";
+  inp.inputMode = "numeric";
+  inp.maxLength = 8;
+  var go = document.createElement("button");
+  go.type = "button";
+  go.textContent = "Unlock";
+  go.onclick = function(){ unlock(inp.value.trim()); };
+  inp.onkeydown = function(e){ if(e.key === "Enter"){ e.preventDefault(); unlock(inp.value.trim()); } };
+  row.appendChild(lab);
+  row.appendChild(inp);
+  row.appendChild(go);
+  s.appendChild(row);
+  var note = document.createElement("p");
+  note.className = "note";
+  note.id = "pinnote";
+  note.textContent = msg || "The machine is on a shared network, so the settings are behind the " +
+    "access PIN from Settings > WiFi & updates.";
+  s.appendChild(note);
+  document.getElementById("settings").appendChild(s);
+}
+
+function unlock(pin){
+  if(pin.length < 1) return;
+  authPin = pin;
+  loadSettings();
+}
+
+function loadSettings(){
+  if(loading) return; // the status poll asks once a second; one request at a time is enough
+  loading = true;
+  authFetch("/api/settings").then(function(r){
+    if(r.status === 401) return null; // relock() has already said so
+    return r.json();
+  }).then(function(d){
+    loading = false;
+    if(!d) return;
+    loaded = true;
+    document.getElementById("settings").dataset.lock = "0";
+    render(d);
+  }).catch(function(){
+    loading = false;
+    var note = document.getElementById("pinnote");
+    if(note) note.textContent = "Could not load settings.";
+    else document.getElementById("settings").textContent = "Could not load settings.";
+  });
 }
 
 function chip(label, value, live, bad){
@@ -866,6 +1127,14 @@ function chip(label, value, live, bad){
 function status(){
   if(document.hidden) return;
   fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+    if(s.wifiUser) authUser = s.wifiUser;
+    // The settings are fetched once the controller says they may be. On its own access point that
+    // is immediately; on a house network it waits for the PIN.
+    locked = !!s.locked;
+    if(locked && !loaded) showLock();
+    if(!locked && !loaded) loadSettings();
+    if(wfNow) wfNow.textContent = (s.wifiLink === "sta" ? s.wifiSsid : "own access point") +
+        (s.wifiIp ? " - " + s.wifiIp : "");
     // The measurement system can be changed on the panel while this page is open. Every distance
     // and speed on it is rendered in whichever is current, so follow the change rather than
     // showing millimetres until someone reloads.
@@ -877,11 +1146,15 @@ function status(){
         loadDerived();
       }
     }
+    // Not editable and not a secret, so it is there whether or not the page is unlocked.
+    if(!derivedOnce){
+      derivedOnce = true;
+      loadDerived();
+    }
     var html = "";
     html += chip("", s.on ? "RUNNING" : "stopped", s.on);
     if(s.mode) html += chip("mode", s.mode);
-    html += chip("rpm", s.rpm);
-    html += chip("Z", fmtDu(s.z) + (metric ? " mm" : " in"));
+    html += chip("rpm", s.rpm);    html += chip("Z", fmtDu(s.z) + (metric ? " mm" : " in"));
     html += chip(s.dia ? "X&oslash;" : "X", fmtDu(s.x) + (metric ? " mm" : " in"));
     if(s.a1active) html += chip("C", fmtDu(s.a1));
 
@@ -908,6 +1181,9 @@ function status(){
       if(s.flips > 0) sig += " · " + s.flips + " flips";
       html += chip("signal", sig, !dirty && lo >= s.coherenceFloor, dirty || (lo >= 0 && lo < s.coherenceFloor));
     }
+    // Which network this page came in over, since the same document is served on both and the
+    // difference decides whether anything here is protected.
+    if(s.wifiIp) html += chip(s.wifiLink === "sta" ? "net" : "ap", s.wifiIp);
     document.getElementById("strip").innerHTML = html;
 
     busy = !!s.busy;
@@ -940,6 +1216,7 @@ document.getElementById("flash").onclick = function(){
   fd.append("firmware", f, f.name);
   var xhr = new XMLHttpRequest();
   xhr.open("POST", "/update");
+  authHeader(xhr);
   xhr.upload.onprogress = function(e){
     if(e.lengthComputable) prog.value = (e.loaded / e.total) * 100;
   };
@@ -1006,7 +1283,7 @@ function gcRow(it){
 }
 
 function gcLoad(){
-  fetch("/api/gcode/list").then(function(r){ return r.json(); }).then(function(d){
+  authFetch("/api/gcode/list").then(function(r){ return r.json(); }).then(function(d){
     gcList.innerHTML = "";
     d.items.forEach(function(it){ gcList.appendChild(gcRow(it)); });
     document.getElementById("gccount").textContent =
@@ -1015,7 +1292,7 @@ function gcLoad(){
 }
 
 function gcPost(url, body, okMsg){
-  fetch(url, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:body})
+  authFetch(url, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:body})
     .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, err:j.error}; }); })
     .then(function(r){
       gcSay(r.ok ? okMsg : "Refused: " + (r.err || "unknown error"));
@@ -1024,7 +1301,7 @@ function gcPost(url, body, okMsg){
 }
 
 function gcEdit(name){
-  fetch("/api/gcode/get?name=" + encodeURIComponent(name))
+  authFetch("/api/gcode/get?name=" + encodeURIComponent(name))
     .then(function(r){ return r.text(); })
     .then(function(t){
       gcName.value = name;
@@ -1069,6 +1346,7 @@ document.getElementById("gcfile").onchange = function(){
   gcProg.value = 0;
   gcProg.hidden = false;
   xhr.open("POST", "/api/gcode/upload" + (n ? "?name=" + encodeURIComponent(n) : ""));
+  authHeader(xhr);
   xhr.upload.onprogress = function(e){
     if(e.lengthComputable) gcProg.value = (e.loaded / e.total) * 100;
   };
@@ -1091,13 +1369,8 @@ document.getElementById("gcbox").addEventListener("toggle", function(){
   if(this.open) gcLoad();
 });
 
-// Settings first: it sets `metric`, which decides the units the derived table is written in.
-fetch("/api/settings").then(function(r){ return r.json(); }).then(function(d){
-  render(d);
-  loadDerived();
-}).catch(function(){
-  document.getElementById("settings").textContent = "Could not load settings.";
-});
+// The status poll decides whether the settings can be fetched at all, so it goes first and owns
+// the decision - on a house network they stay behind the access PIN until it is typed in.
 status();
 setInterval(status, 1000);
 </script>
