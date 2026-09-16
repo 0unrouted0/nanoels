@@ -4650,7 +4650,6 @@ void handleSettingWrite() {
 }
 
 void handleDump() {
-  if (!webAuthOk()) return; // the access PIN is one of the lines in it
   webServer.sendHeader("Content-Disposition", "attachment; filename=nanoels-settings.txt");
   webServer.send(200, "text/plain", settingsDumpText());
 }

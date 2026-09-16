@@ -482,7 +482,7 @@ button.del {
     </details>
   </section>
 
-  <section>
+  <section id="gcsection" hidden>
     <details id="gcbox">
       <summary>G-code programs <span id="gccount"></span></summary>
       <div class="tblwrap">
@@ -513,7 +513,7 @@ button.del {
     </details>
   </section>
 
-  <section>
+  <section id="fwsection" hidden>
     <details>
       <summary>Firmware update</summary>
       <div class="tools">
@@ -1131,6 +1131,8 @@ function status(){
     // The settings are fetched once the controller says they may be. On its own access point that
     // is immediately; on a house network it waits for the PIN.
     locked = !!s.locked;
+    document.getElementById("gcsection").hidden = locked;
+    document.getElementById("fwsection").hidden = locked;
     if(locked && !loaded) showLock();
     if(!locked && !loaded) loadSettings();
     if(wfNow) wfNow.textContent = (s.wifiLink === "sta" ? s.wifiSsid : "own access point") +

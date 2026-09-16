@@ -283,12 +283,16 @@ function poll(next) {
   page.unlock('00000000');
   await new Promise((resolve) => setImmediate(resolve));
   eq('a refused PIN leaves the page locked', document.getElementById('settings').dataset.lock, '1');
+  ok('G-code is hidden while locked', document.getElementById('gcsection').hidden);
+  ok('firmware is hidden while locked', document.getElementById('fwsection').hidden);
   ok('and says so', document.getElementById('pinnote').textContent.includes('not accepted'));
 
   routes['/api/settings'] = settingsPayload;
   page.unlock('13572468');
   await new Promise((resolve) => setImmediate(resolve));
   eq('the right one opens it', document.getElementById('settings').dataset.lock, '0');
+  ok('G-code is visible after unlock', !document.getElementById('gcsection').hidden);
+  ok('firmware is visible after unlock', !document.getElementById('fwsection').hidden);
 
   await poll(payload);
   ok('the strip kept running throughout', strip.includes('200'));
