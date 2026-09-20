@@ -2,6 +2,8 @@
 
 The controller can bring up its own WiFi network so you can edit every setting from a phone or
 laptop and install new firmware without carrying a computer to the lathe and plugging in a cable.
+It can also join a network you already have, so the machine is reachable from anywhere in the
+workshop without leaving your phone cut off from the internet.
 
 It is **off by default**. With it off there is no radio, no extra task, and the controller behaves
 exactly as it did before this existed. Nothing here happens unless you turn it on.
@@ -19,13 +21,14 @@ any web page to switch it on from.
 3. On **Enabled**, press **play** to switch it to `yes`.
 
 **No restart needed.** The access point comes up within a second or so, the splash line shows
-`NanoEls-H4`, and the **Enabled** item shows the address beside its value:
+`NanoEls-H4`, and the **Enabled** item shows the address beside its value with the network it is on
+underneath:
 
 ```
-WiFi & updates 1/2
+WiFi & updates 1/4
 Enabled
 Now yes   192.168.4.1
-ON to toggle
+Own AP NanoEls-H4
 ```
 
 Switching it back to `no` shuts the radio down again, also without a restart. Turning it on to
@@ -37,13 +40,109 @@ itself back off rather than retrying, so the controller is never stuck in a fail
 Changing the PIN while the network is up restarts it so the new password takes effect, which
 disconnects anyone currently on it. That is the point of changing it.
 
+The section holds four items: **Enabled**, **Access PIN**, **Join timeout** and **Forget network**.
+The last two only matter once the machine has joined a network of yours, which is the next section.
+
 ## Connecting
 
 Join the WiFi network **`NanoEls-H4`** using your PIN as the password, then browse to
-**http://192.168.4.1**.
+**http://192.168.4.1** or **http://nanoels.local**.
 
 Your phone will most likely warn that this network has no internet connection and offer to switch
 back to mobile data. Tell it to stay connected, or the page will not load.
+
+---
+
+## Joining your own network
+
+The machine can hang off your workshop router instead of making a network of its own. Your phone
+then keeps its internet connection, and the page is reachable from anywhere the router reaches.
+
+A network name cannot be typed on a numeric keypad, so this is done from the browser. Connect to
+the machine's own access point first, as above.
+
+1. Open the **WiFi & updates** section on the page.
+2. Press **Scan**. The networks in range appear as buttons, strongest first, with a signal
+   strength beside each name.
+3. Tap the one you want, type its password, and press **Join**.
+
+Joining takes a few seconds. On success the page tells you the machine's new address, and the
+access point shuts down shortly afterwards — your phone drops off it, which is expected. Reconnect
+your phone to the same network and carry on at **http://nanoels.local**, or at the IP address the
+page gave you, which the panel also shows:
+
+```
+WiFi & updates 1/4
+Enabled
+Now yes   192.168.1.44
+On Workshop
+```
+
+`nanoels.local` works out of the box on iPhones, Macs and Windows 10 or newer. Older Android
+devices do not resolve it, so use the IP address there.
+
+If the password was wrong or the router out of range, nothing is stored and nothing is lost: the
+access point is never taken down during the attempt, so the page reports the refusal and you can
+try again.
+
+### At every restart afterwards
+
+The sequence is the same every single time the controller starts:
+
+1. If a network is stored, try to join it, for up to **Join timeout** seconds.
+2. If that works, the machine is on your network and the panel shows its address there.
+3. If it does not — router switched off, moved out of range, password changed — the machine brings
+   up its own **`NanoEls-H4`** access point instead, exactly as it did before.
+
+A failed attempt never deletes the stored network. Switch the router back on, restart the
+controller, and it joins again. The only thing that forgets a network is the item that says so.
+
+**Join timeout** is how long step 1 is allowed to take, from 5 to 120 seconds, 15 by default. It is
+dead time at every start, so keep it short; raise it only if your router is slow to hand out
+addresses.
+
+### Forgetting it
+
+On the panel, go to **Forget network** and press **play**. The item names the network it is about
+to forget, which is the only confirmation it gets:
+
+```
+WiFi & updates 4/4
+Forget network
+Workshop
+ON to forget
+```
+
+The stored name and password are erased and the radio comes back up as the machine's own access
+point. The page has a **Forget** button that does the same thing.
+
+---
+
+## The PIN on somebody else's network
+
+On the machine's own access point the WPA2 password is the gate: anyone who got onto the network
+already proved they know the PIN, so the page asks for nothing.
+
+On your workshop network there is no such gate — every device in the building can reach the page.
+So the page asks for the same **Access PIN** before it will show or change anything:
+
+```
+Access PIN   [        ]  [ Unlock ]
+```
+
+Open without it: the version, the live status chips along the top, the running/stopped banner and
+the derived-figures table. Watching what the machine is doing is not what the PIN is protecting.
+
+Behind it: the settings list, saving any value, the settings backup, the stored G-code programs,
+the network controls and firmware updates. The backup is in that list for a reason of its own — the
+file it produces contains the access PIN as one of its lines.
+
+Enter the PIN once per page load. Reload the page and you enter it again; nothing is remembered
+between visits.
+
+> **This is a lock, not encryption.** The PIN travels over plain HTTP, so it keeps the household
+> and the rest of the shop floor out. It would not survive somebody capturing traffic on your
+> network. If that is a concern, leave the machine on its own access point.
 
 ---
 
@@ -73,7 +172,9 @@ Everything here updates as soon as you change a setting that feeds it.
 
 Every value in the LCD menu appears on the page, grouped into the same sections and in the same
 order — the page is generated from the same table the controller's own menu walks, so the two can
-never disagree.
+never disagree. The exceptions are the menu items that are not values at all but open a screen on
+the controller — calibration, the thread database, **Forget network** — which have nothing to edit
+over HTTP.
 
 - **Numbers** — type the new value.
 - **Distances** — shown in mm or inches depending on the controller's current measurement mode.
@@ -107,6 +208,9 @@ browser.
 **Download settings** saves every value as a text file. Restore it by pasting the lines back over
 USB serial. This is worth doing before any firmware update.
 
+The file lists the access PIN among the settings, which is why it is one of the things the
+[PIN prompt](#the-pin-on-somebody-elses-network) covers on a shared network.
+
 ### Firmware update
 
 1. Build the sketch and find the `.bin` (in Arduino IDE: *Sketch → Export compiled binary*).
@@ -138,6 +242,14 @@ drift while the update runs.
 That is the intended outcome: the new image is written but not yet running, and the machine is
 still rather than half-controlled. Power cycle it.
 
+**On a shared network, everyone can reach the page.** The machine's own access point keeps it to
+whoever knows the PIN; a workshop router does not. That is what the
+[PIN prompt](#the-pin-on-somebody-elses-network) is for, and why the firmware update is behind it.
+
+**The router password is stored in plain text.** It lives in the ESP32's settings flash, which is
+not encrypted. Anyone who walks off with the controller, or reads the chip out, can recover the
+password of whatever network you joined. Put the machine on a guest network if that matters.
+
 ---
 
 ## Why the PIN is eight digits
@@ -151,6 +263,9 @@ report an error — it quietly brings up an **open** network that anyone can joi
 stored as a number comes back as `1234567`, seven characters, and would do exactly that. So the
 settings menu refuses anything that is not in the range 10000000–99999999, which guarantees eight
 characters and no lost leading zero.
+
+The same PIN does double duty: on a workshop network, where there is no WiFi password in front of
+the machine, it is what unlocks the page.
 
 **Change it from the default.** Anyone who can join this network can reflash the controller.
 
@@ -168,8 +283,18 @@ restart, turning it on only when you need it costs nothing.
 
 ---
 
-## Changing the network name
+## Compile-time settings
 
-`WIFI_SSID`, the channel and the default PIN are in `machine_config.h` alongside the rest of the
-wiring-level configuration. The name is compile-time because, unlike the PIN, it is not something
-the numeric settings table can hold.
+These live in `src/configs/machine_config_*.h` alongside the rest of the wiring-level
+configuration. The network name is compile-time because, unlike the PIN, it is not something the
+numeric settings table can hold.
+
+| Constant | Default | What it is |
+|---|---|---|
+| `WIFI_SSID` | `NanoEls-H4` | Name of the machine's own access point. |
+| `WIFI_CHANNEL` | `1` | Channel that access point uses. |
+| `WIFI_ENABLED` | `false` | Whether the radio is on before anyone has touched the setting. |
+| `WIFI_PIN_DEFAULT` | `13572468` | Starting access PIN. Change it. |
+| `WIFI_HOSTNAME` | `nanoels` | Name announced over mDNS, so `nanoels.local` resolves. |
+| `WIFI_AUTH_USER` | `nanoels` | User name the page sends with the PIN on a shared network. |
+| `WIFI_STA_TIMEOUT_S` | `15` | Starting value for **Join timeout**, adjustable from the menu. |

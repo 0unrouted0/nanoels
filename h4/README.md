@@ -90,6 +90,8 @@ To enable, set `JOYSTICK_USE = true` near the top of `h4.ino` and re-upload the 
 
 #### PlatformIO
 
+**This is the recommended way to build the firmware.** The Arduino IDE still works, but it needs the setup described below and pins nothing.
+
 The main advantage of PlatformIO is that the platform, framework and library dependencies are defined in `platformio.ini`. This binds the required versions more precisely, makes builds reproducible and avoids depending on libraries that happen to be installed on the computer in different versions.
 
 - Download and install [Visual Studio Code](https://code.visualstudio.com/)
@@ -108,6 +110,13 @@ The main advantage of PlatformIO is that the platform, framework and library dep
 - Download [this repository](https://github.com/kachurovskiy/nanoels/archive/refs/heads/main.zip), unzip, go to `h4` directory and open `h4.ino` file in the Arduino IDE
 - Check the top constants (e.g. encoder steps, motor steps, display offset) and adjust if needed
 
+What the Arduino IDE can't do for you, and PlatformIO does:
+
+- **The sketch folder has to be called `h4`.** The Arduino IDE insists the folder name match the `.ino` file, so the PlatformIO layout `software/src/h4.ino` can't be opened as it stands - the sources have to sit in a folder named `h4`, with `configs/` beside them.
+- **The `esp32` board package must be a 3.x version.** The firmware uses the core 3.x timer API (`timerBegin(80)`, `timerAlarm(...)`, two-argument `timerAttachInterrupt`), which doesn't compile against 2.0.x. PlatformIO pins Arduino core 3.2.0 on ESP-IDF 5.4.1; the Arduino IDE takes whatever the Board Manager last installed.
+- **Two more libraries are needed** than the list above: Adafruit `BusIO` (a TCA8418 dependency) and `LiquidCrystal`, the latter only if a configuration without `DISPLAY_I2C_EXPANDER` is selected. Their versions are whatever is installed, where `platformio.ini` pins 1.0.2, 1.17.0 and 1.0.7.
+- **Every board setting has to be picked by hand** under Tools: ESP32S3 Dev Module, 4MB flash, QIO, 80MHz flash, 240MHz CPU, USB CDC On Boot disabled. For the partition scheme, take an OTA-capable 4MB layout that still leaves roughly 1.4MB of filesystem - a scheme without OTA breaks WiFi updates, and `Minimal SPIFFS` leaves about 190KB, too little for the GCode store.
+- **Builds aren't reproducible.** The `__DATE__` / `__TIME__` pinning in `platformio.ini` has no per-project equivalent in the Arduino IDE, so the compilation timestamp ends up in the binary.
 
 ### Upload
 
@@ -117,8 +126,9 @@ The main advantage of PlatformIO is that the platform, framework and library dep
 - The very first upload has to be over USB
 
 After the first cable upload you can install later versions over WiFi instead — see
-[WIFI.md](WIFI.md). The partition layout already has two application slots, so no change to the
-board settings is needed.
+[WIFI.md](WIFI.md). Under PlatformIO the partition layout already has two application slots, so no
+change to the board settings is needed; in the Arduino IDE an OTA-capable partition scheme has to be
+selected first.
 
 ### After upload
 

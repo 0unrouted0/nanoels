@@ -4328,13 +4328,15 @@ String settingsKeyName(int index) {
 }
 
 // Every stored setting as lines that can be pasted straight back in to restore it, followed by
-// diagnostics. Machine config only - positions and stops are working state. One definition, so the
-// serial dump and the file the web UI offers for download are the same backup byte for byte.
+// diagnostics. Machine config only - positions and stops are working state, and the access PIN is
+// left out because a backup gets passed around. One definition, so the serial dump and the file
+// the web UI offers for download are the same backup byte for byte.
 String settingsDumpText() {
   String out = "; NanoEls H" + String(HARDWARE_VERSION) + " V" + String(SOFTWARE_VERSION) + " settings\n";
   out += "; paste these lines back to restore, distances are in deci-microns\n";
   for (int i = 0; i < SETTINGS_COUNT; i++) {
-    if (settingIsAction(i)) continue;
+    // wfpw is the WPA2 password, so it is not written out; restoring leaves whatever is set.
+    if (settingIsAction(i) || settingsKeyName(i) == "wfpw") continue;
     out += "$" + settingsKeyName(i) + "=" + String(settingsReadValue(i)) + "\n";
   }
   Preferences pref;
