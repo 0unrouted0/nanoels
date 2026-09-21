@@ -184,7 +184,7 @@ const float GCODE_FEED_MIN_DU_SEC = 167; // Minimum feed in du/sec in GCode mode
 #define DELAY(x) vTaskDelay(x / portTICK_PERIOD_MS);
 
 // ESP32 hardware pulse counter library used to count spindle encoder pulses.
-#include "driver/pcnt.h"
+#include "driver/pulse_cnt.h"
 
 #include <SPI.h>
 #include <Wire.h>
@@ -2440,48 +2440,53 @@ void migrateGcodeFromPreferences() {
 //
 // Counting both channels' edges means every transition is accounted for, so an excursion that
 // returns to the same state nets to zero no matter which order the edges arrived in.
-void startPulseCounter(pcnt_unit_t unit, int gpioA, int gpioB) {
+pcnt_unit_handle_t spindleCounter = NULL;
+
+// The driver takes the glitch filter in nanoseconds, while encoderFilter is in APB clock cycles -
+// the unit machine_config.h documents and Preferences stores. Converting here keeps that setting,
+// its 1-1023 range and the RPM formulas untouched.
+uint32_t encoderFilterNs(int cycles) {
+  return (cycles * 1000 + 79) / 80; // rounded up so the driver's ns -> cycle division lands back on `cycles`
+}
+
+void startPulseCounter(int gpioA, int gpioB) {
+  pcnt_unit_config_t unitConf = {};
+  unitConf.low_limit = -PCNT_LIM;
+  unitConf.high_limit = PCNT_LIM;
+  pcnt_new_unit(&unitConf, &spindleCounter);
+
   // Channel 0 counts A's edges, using B to tell which way the shaft turned.
-  pcnt_config_t chA;
-  chA.pulse_gpio_num = gpioA;
-  chA.ctrl_gpio_num = gpioB;
-  chA.channel = PCNT_CHANNEL_0;
-  chA.unit = unit;
-  chA.pos_mode = PCNT_COUNT_DEC;
-  chA.neg_mode = PCNT_COUNT_INC;
-  chA.lctrl_mode = PCNT_MODE_REVERSE;
-  chA.hctrl_mode = PCNT_MODE_KEEP;
-  chA.counter_h_lim = PCNT_LIM;
-  chA.counter_l_lim = -PCNT_LIM;
-  pcnt_unit_config(&chA);
+  pcnt_chan_config_t chAConf = {};
+  chAConf.edge_gpio_num = gpioA;
+  chAConf.level_gpio_num = gpioB;
+  pcnt_channel_handle_t chA;
+  pcnt_new_channel(spindleCounter, &chAConf, &chA);
+  pcnt_channel_set_edge_action(chA, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+  pcnt_channel_set_level_action(chA, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
 
   // Channel 1 does the mirror image: B's edges, direction from A. Together the two cover all
   // four transitions of the quadrature cycle.
-  pcnt_config_t chB;
-  chB.pulse_gpio_num = gpioB;
-  chB.ctrl_gpio_num = gpioA;
-  chB.channel = PCNT_CHANNEL_1;
-  chB.unit = unit;
-  chB.pos_mode = PCNT_COUNT_INC;
-  chB.neg_mode = PCNT_COUNT_DEC;
-  chB.lctrl_mode = PCNT_MODE_REVERSE;
-  chB.hctrl_mode = PCNT_MODE_KEEP;
-  chB.counter_h_lim = PCNT_LIM;
-  chB.counter_l_lim = -PCNT_LIM;
-  pcnt_unit_config(&chB);
+  pcnt_chan_config_t chBConf = {};
+  chBConf.edge_gpio_num = gpioB;
+  chBConf.level_gpio_num = gpioA;
+  pcnt_channel_handle_t chB;
+  pcnt_new_channel(spindleCounter, &chBConf, &chB);
+  pcnt_channel_set_edge_action(chB, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+  pcnt_channel_set_level_action(chB, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
 
   // The filter applies to the unit's inputs, so its RPM ceiling is unchanged by the decode mode.
-  pcnt_set_filter_value(unit, encoderFilter);
-  pcnt_filter_enable(unit);
-  pcnt_counter_pause(unit);
-  pcnt_counter_clear(unit);
-  pcnt_counter_resume(unit);
+  pcnt_glitch_filter_config_t filterConf = {};
+  filterConf.max_glitch_ns = encoderFilterNs(encoderFilter);
+  pcnt_unit_set_glitch_filter(spindleCounter, &filterConf);
+  pcnt_unit_enable(spindleCounter);
+  pcnt_unit_clear_count(spindleCounter);
+  pcnt_unit_start(spindleCounter);
 }
 
 // Attaching interrupt on core 0 to have more time on core 1 where axes are moved.
 void taskAttachInterrupts(void *param) {
   encHealthReset(&encHealth, micros());
-  startPulseCounter(PCNT_UNIT_0, ENC_A, ENC_B);
+  startPulseCounter(ENC_A, ENC_B);
   // The handwheel interrupts are attached by applyAuxPins(), which owns the aux terminals and
   // runs again whenever a device is enabled or disabled.
   vTaskDelete(NULL);
@@ -4190,7 +4195,15 @@ const char* settingsWriteValue(int index, long value) {
     // machine_config.h carries the formula.
     if (value < 1 || value > 1023) return "Filter must be 1-1023";
     encoderFilter = value;
-    pcnt_set_filter_value(PCNT_UNIT_0, encoderFilter);
+    // The filter can only be set while the unit is idle, so counting pauses for the moment it takes.
+    // The count itself survives; only pulses arriving inside that window are missed.
+    pcnt_unit_stop(spindleCounter);
+    pcnt_unit_disable(spindleCounter);
+    pcnt_glitch_filter_config_t filterConf = {};
+    filterConf.max_glitch_ns = encoderFilterNs(encoderFilter);
+    pcnt_unit_set_glitch_filter(spindleCounter, &filterConf);
+    pcnt_unit_enable(spindleCounter);
+    pcnt_unit_start(spindleCounter);
   } else if (!strcmp(k, "rtd")) {
     if (value <= 0) return "Must be above 0";
     retractDu = value;
@@ -6268,7 +6281,9 @@ void updateCalDisplay() {
         charIndex = lcd.print("Mark the chuck first");
       } else if (calStep == 1) {
         charIndex = lcd.print("PPR so far ");
-        charIndex += lcd.print(long(round(counts / (2.0 * CAL_REVS[calParamIndex]))));
+        long rawCountsdisplay = (spindlePos - calRefSpindle) * encoderDivider * encoderPulleyTeeth;
+        long ppr_display = calPprFromCounts(rawCountsdisplay, CAL_REVS[calParamIndex] * encoderSpindleTeeth);
+        charIndex += lcd.print(ppr_display);
       } else {
         charIndex = lcd.print("New encoder PPR");
       }
@@ -7376,8 +7391,9 @@ void discountFullSpindleTurns() {
 }
 
 void processSpindleCounter() {
-  int16_t count;
-  pcnt_get_counter_value(PCNT_UNIT_0, &count);
+  int rawCount;
+  pcnt_unit_get_count(spindleCounter, &rawCount);
+  int16_t count = rawCount; // the counter is 16 bit, and the wrap correction below depends on it
   int delta = count - spindleCount;
   spindleCount = count;
   if (delta == 0) {

@@ -1126,7 +1126,7 @@ function chip(label, value, live, bad){
 
 function status(){
   if(document.hidden) return;
-  fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+  authFetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
     if(s.wifiUser) authUser = s.wifiUser;
     // The settings are fetched once the controller says they may be. On its own access point that
     // is immediately; on a house network it waits for the PIN.
